@@ -7,11 +7,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::mpsc;
 
-pub fn run() -> Result<()> {
-    let file_path = "_geek/small.txt";
+pub fn run(file_path: &str) -> Result<()> {
 
     // Créer un tracker d'offsets
-    let offset_tracker2 = &mut OffsetTracker2::new();
+    let offset_tracker2 = &mut OffsetTracker::new();
     offset_tracker2.add_offset(file_path)?;
 
     // Afficher le contenu initial du fichier
@@ -41,7 +40,7 @@ pub fn run() -> Result<()> {
                     // Lire à partir de l'offset enregistré
                     // read_from_offset(file_path, &offset_tracker)?;
                     // read_line_by_line(file_path, &offset_tracker)?;
-                    read_line_by_line2(file_path, offset_tracker2)?;
+                    read_line_by_line(file_path, offset_tracker2)?;
                 }
             }
             Err(e) => {
@@ -60,11 +59,11 @@ struct FileBuffer {
 }
 
 // Structure pour gérer les offsets de lecture
-struct OffsetTracker2 {
+struct OffsetTracker {
     offsets: HashMap<String, FileBuffer>,
 }
 
-impl OffsetTracker2 {
+impl OffsetTracker {
     fn new() -> Self {
         Self {
             offsets: HashMap::new(),
@@ -91,28 +90,9 @@ impl OffsetTracker2 {
         let x = self.offsets.get_mut(file_path).unwrap();
         Ok(x)
     }
-
-    // fn update_offset(&mut self, file_path: &str, line: u64) -> Result<()> {
-    //     // Obtenir la taille actuelle du fichier
-    //     // let metadata = std::fs::metadata(file_path)?;
-    //     // let file_size = metadata.len();
-    //
-    //     // let fo = FileBuffer{
-    //     //     current_line: line,
-    //     //     offset: file_size,
-    //     // };
-    //
-    //     // let mut offsets = self.offsets.lock().unwrap();
-    //     let fo = self.offsets.get_mut(file_path).unwrap();
-    //     // fo.offset = file_size;
-    //     // fo.current_line = line;
-    //     // self.offsets.insert(file_path.to_string(), fo);
-    //
-    //     Ok(())
-    // }
 }
 
-fn read_line_by_line2(file_path: &str, offset_tracker: &mut OffsetTracker2) -> Result<()> {
+fn read_line_by_line(file_path: &str, offset_tracker: &mut OffsetTracker) -> Result<()> {
     // print!("-");
 
     let fb = offset_tracker.get_offset(file_path)?;

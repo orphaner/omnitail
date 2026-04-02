@@ -57,7 +57,7 @@ impl OffsetTracker {
 }
 
 pub fn run() -> Result<()> {
-    let file_path = "_geek/small.txt";
+    let file_path = "_geek/medium.txt";
 
     // Créer un tracker d'offsets
     let offset_tracker = OffsetTracker::new();

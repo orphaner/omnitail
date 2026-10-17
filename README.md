@@ -28,7 +28,23 @@ Container sources (docker, compose, k8s) restart when their stream ends, resumin
 
 Sources can also be listed in a TOML file, `mtr -c stack.toml`, with per-source `name`, `lines` and `restart`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`.
 
-Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi`, `--log-file PATH`.
+## Colors
+
+mtr colors log lines itself: levels, timestamps, IPs, URLs, UUIDs and durations stand out. Each source's format is guessed from its first lines, then the matching scheme is used: `http` (nginx/apache access logs), `json`, `logfmt` or `syslog`, falling back on `generic`. Lines that already carry their own ANSI colors keep them.
+
+In a config file, a source can pick its scheme(s) explicitly (`scheme = "http"`, `scheme = ["mine", "generic"]`, or `scheme = "none"`), and you can define your own:
+
+```toml
+[scheme.mine]
+rules = [
+  { regex = 'user=(\w+)', group = 1, style = "yellow bold" },  # group 0 (default) = whole match
+  { regex = 'payment failed', style = "fg:white bg:160 bold" },
+]
+```
+
+Styles are color names (red, green, yellow, blue, magenta, cyan, white, gray, orange, black), `0`-`255` or `#rrggbb`, plus `bold`, `dim`, `italic`, `underline` and `reverse`, with `fg:` and `bg:` prefixes. Where two rules match the same text, the first one wins. `--no-color` (or `color = false`) starts with coloring off.
+
+Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi` (then mtr colors those lines too), `--no-color`, `--log-file PATH`.
 
 ## Keys
 
@@ -39,3 +55,5 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 | `N` | clear all panes (the history is kept) |
 | `n` | choose one pane to clear |
 | `b` | choose a pane and browse its whole history, including what was cleared (`j`/`k`, `PgUp`/`PgDn`, `g`/`G`) |
+| `C` | mtr's coloring on/off for all panes |
+| `c` | choose one pane to turn coloring on/off |

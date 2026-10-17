@@ -6,3 +6,48 @@ services:
   db:
     image: alpine:3
     command: sh -c 'i=0; while true; do i=$$((i+1)); printf "\033[33mdb\033[0m checkpoint %s\n" $$i; sleep 1; done'
+
+  # Access logs in the nginx "combined" format (detected as `http`).
+  nginx:
+    image: alpine:3
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          set -- 200 200 200 201 304 404 500
+          shift $$((RANDOM % 7)); code=$$1
+          printf '172.18.0.%s - - [%s] "GET /api/items/%s HTTP/1.1" %s %s "-" "curl/8.5"\n' \
+            $$((RANDOM % 250)) "$$(date '+%d/%b/%Y:%H:%M:%S +0000')" $$((RANDOM % 900)) $$code $$((RANDOM % 5000))
+          sleep 0.7
+        done
+
+  # One JSON object per line (detected as `json`).
+  api:
+    image: alpine:3
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          set -- info info info debug warn error
+          shift $$((RANDOM % 6)); level=$$1
+          printf '{"time":"%s","level":"%s","msg":"handled request","user_id":%s,"duration_ms":%s,"ok":true}\n' \
+            "$$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $$level $$((RANDOM % 100)) $$((RANDOM % 300))
+          sleep 0.9
+        done
+
+  # key=value lines (detected as `logfmt`).
+  worker:
+    image: alpine:3
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          set -- info info info warn error
+          shift $$((RANDOM % 5)); level=$$1
+          printf 'time=%s level=%s msg="job processed" job=%s attempt=%s duration=%sms\n' \
+            "$$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $$level $$((RANDOM % 1000)) $$((RANDOM % 3 + 1)) $$((RANDOM % 800))
+          sleep 1.1
+        done

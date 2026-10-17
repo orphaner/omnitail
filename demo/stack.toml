@@ -4,9 +4,24 @@
 #   docker compose -f demo/compose.yml down    # when done
 # The k8s source only reads logs (CoreDNS of the default kube context).
 
+# A custom color scheme, chained before the built-in `generic` below.
+[scheme.webdemo]
+rules = [
+  { regex = 'request (\d+)', group = 1, style = "orange bold" },
+]
+
 [[source]]
 type = "compose"
 file = "compose.yml"   # relative to this file
+services = ["web"]
+scheme = ["webdemo", "generic"]
+
+# No scheme: each pane guesses its format (http, json, logfmt…). `db`
+# colors its own output, so mtr leaves those lines alone.
+[[source]]
+type = "compose"
+file = "compose.yml"
+services = ["nginx", "api", "worker", "db"]
 
 [[source]]
 type = "k8s"

@@ -1,0 +1,8 @@
+name: mtrdemo
+services:
+  web:
+    image: alpine:3
+    command: sh -c 'i=0; while true; do i=$$((i+1)); echo "web request $$i"; sleep 0.5; done'
+  db:
+    image: alpine:3
+    command: sh -c 'i=0; while true; do i=$$((i+1)); printf "\033[33mdb\033[0m checkpoint %s\n" $$i; sleep 1; done'

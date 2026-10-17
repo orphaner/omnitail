@@ -1,0 +1,16 @@
+# Demo stack for mtr:
+#   docker compose -f demo/compose.yml up -d
+#   cargo run -- -c demo/stack.toml
+#   docker compose -f demo/compose.yml down    # when done
+# The k8s source only reads logs (CoreDNS of the default kube context).
+
+[[source]]
+type = "compose"
+file = "compose.yml"   # relative to this file
+
+[[source]]
+type = "k8s"
+target = "k8s-app=kube-dns"
+namespace = "kube-system"
+name = "coredns"
+lines = 3

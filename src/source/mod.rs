@@ -3,16 +3,21 @@
 
 mod command;
 mod file;
+mod stdin;
+mod tools;
 
 use std::fmt;
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use crate::spec::SourceSpec;
+use anyhow::Result;
+
+use crate::spec::{SourceConfig, SourceSpec};
 
 pub use command::CommandSource;
 pub use file::FileSource;
+pub use stdin::StdinSource;
 
 /// Index of a source, in the order given on the command line.
 pub type SourceId = usize;
@@ -34,6 +39,8 @@ pub enum SourceStatus {
     Waiting(String),
     /// The underlying process ended; `None` when killed by a signal.
     Exited(Option<i32>),
+    /// The stream is over (end of stdin).
+    Ended,
     Error(String),
 }
 
@@ -44,6 +51,7 @@ impl fmt::Display for SourceStatus {
             SourceStatus::Waiting(why) => write!(f, "waiting: {why}"),
             SourceStatus::Exited(Some(code)) => write!(f, "exited: {code}"),
             SourceStatus::Exited(None) => write!(f, "killed"),
+            SourceStatus::Ended => write!(f, "ended"),
             SourceStatus::Error(e) => write!(f, "error: {e}"),
         }
     }
@@ -84,24 +92,54 @@ pub trait Source: Send {
     fn spawn(self: Box<Self>, out: Emitter) -> JoinHandle<()>;
 }
 
-pub struct SourceOptions {
-    /// Existing lines to show when the source starts.
-    pub initial_lines: usize,
+/// Turns sources that stand for several streams into one source per pane.
+/// Today that is compose: one pane per service.
+pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
+    let mut out = Vec::new();
+    for source in sources {
+        let SourceSpec::Compose { services, file } = &source.spec else {
+            out.push(source);
+            continue;
+        };
+        let services = match services.len() {
+            1 => {
+                out.push(source);
+                continue;
+            }
+            0 => tools::compose_services(file.as_deref()).await?,
+            _ => services.clone(),
+        };
+        for service in services {
+            out.push(SourceConfig {
+                spec: SourceSpec::Compose { services: vec![service.clone()], file: file.clone() },
+                name: source.name.as_ref().map(|n| format!("{n}:{service}")),
+                ..source.clone()
+            });
+        }
+    }
+    Ok(out)
 }
 
-pub fn build(spec: &SourceSpec, opts: SourceOptions) -> Box<dyn Source> {
-    match spec {
-        SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), opts.initial_lines)),
-        SourceSpec::Cmd { command } => Box::new(CommandSource::shell(command)),
-        // POC: go through the docker CLI; a native client can replace this later.
-        SourceSpec::Docker { container } => Box::new(CommandSource::new(vec![
-            "docker".into(),
-            "logs".into(),
-            "--follow".into(),
-            "--tail".into(),
-            opts.initial_lines.to_string(),
-            container.clone(),
-        ])),
+/// `lines`: existing lines to show when the source starts.
+pub fn build(config: &SourceConfig, lines: usize) -> Box<dyn Source> {
+    let command = |argv| Box::new(CommandSource::new(argv).restart(config.restart()));
+    match &config.spec {
+        SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), lines)),
+        SourceSpec::Cmd { command: c } => Box::new(CommandSource::shell(c).restart(config.restart())),
+        SourceSpec::Docker { container } => command(tools::docker(container.clone(), lines)),
+        SourceSpec::Compose { services, file } => command(tools::compose(file.clone(), services.clone(), lines)),
+        SourceSpec::K8s { target, namespace, context, container, args } => command(tools::k8s(
+            tools::K8sTarget {
+                target: target.clone(),
+                namespace: namespace.clone(),
+                context: context.clone(),
+                container: container.clone(),
+                args: args.clone(),
+            },
+            lines,
+        )),
+        SourceSpec::Journal { unit } => command(tools::journal(unit.clone(), lines)),
+        SourceSpec::Stdin => Box::new(StdinSource),
     }
 }
 

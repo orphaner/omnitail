@@ -15,6 +15,8 @@ pub struct Pane {
     pub name: String,
     /// `None` until the source reports something.
     pub status: Option<SourceStatus>,
+    /// Times the source came back after ending.
+    pub restarts: u32,
     pub buffer: Buffer,
 }
 
@@ -55,7 +57,7 @@ impl App {
     pub fn new(names: Vec<String>, history: usize, strip_ansi: bool) -> Self {
         let panes = names
             .into_iter()
-            .map(|name| Pane { name, status: None, buffer: Buffer::new(history) })
+            .map(|name| Pane { name, status: None, restarts: 0, buffer: Buffer::new(history) })
             .collect();
         Self { panes, mode: Mode::Panes, strip_ansi, quit: false }
     }
@@ -70,6 +72,10 @@ impl App {
             }
             SourceEvent::Status(status) => {
                 tracing::info!(source = %pane.name, %status);
+                let was_down = matches!(pane.status, Some(SourceStatus::Exited(_) | SourceStatus::Error(_)));
+                if was_down && status == SourceStatus::Running {
+                    pane.restarts += 1;
+                }
                 pane.status = Some(status);
             }
         }
@@ -166,6 +172,7 @@ pub async fn run(
     mut events: mpsc::Receiver<(SourceId, SourceEvent)>,
 ) -> Result<()> {
     let mut input = EventStream::new();
+    let mut signals = Signals::new()?;
     let mut dirty = true;
     while !app.quit {
         if dirty {
@@ -183,6 +190,7 @@ pub async fn run(
                 Some(Err(e)) => return Err(e.into()),
                 None => break,
             },
+            () = signals.recv() => break,
             Some((id, event)) = events.recv() => {
                 app.ingest(id, event);
                 for _ in 0..MAX_BATCH {
@@ -196,6 +204,41 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+/// SIGTERM, SIGHUP (terminal closed) and SIGINT end mtr like `q` does, so
+/// that sources get dropped and their processes stopped. Ctrl+C itself
+/// arrives as a key in raw mode.
+struct Signals(#[cfg(unix)] [tokio::signal::unix::Signal; 3]);
+
+impl Signals {
+    fn new() -> std::io::Result<Self> {
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            Ok(Self([
+                signal(SignalKind::terminate())?,
+                signal(SignalKind::hangup())?,
+                signal(SignalKind::interrupt())?,
+            ]))
+        }
+        #[cfg(not(unix))]
+        Ok(Self())
+    }
+
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            let [a, b, c] = &mut self.0;
+            tokio::select! {
+                _ = a.recv() => {}
+                _ = b.recv() => {}
+                _ = c.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await
+    }
 }
 
 #[cfg(test)]
@@ -227,6 +270,18 @@ mod tests {
         press(&mut a, KeyCode::Char('b'));
         a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(a.quit, "ctrl-c quits from any mode");
+    }
+
+    #[test]
+    fn counts_restarts() {
+        let mut a = app(1);
+        let status = |a: &mut App, s| a.ingest(0, SourceEvent::Status(s));
+        status(&mut a, SourceStatus::Running);
+        status(&mut a, SourceStatus::Exited(Some(1)));
+        status(&mut a, SourceStatus::Running);
+        status(&mut a, SourceStatus::Error("x".into()));
+        status(&mut a, SourceStatus::Running);
+        assert_eq!(a.panes[0].restarts, 2);
     }
 
     #[test]

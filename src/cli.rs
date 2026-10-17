@@ -8,14 +8,19 @@ use crate::spec::SourceSpec;
 #[derive(Debug, Parser)]
 #[command(version, about)]
 pub struct Cli {
-    /// Sources to follow: `file:<path>`, `cmd:<command>`, `docker:<container>`.
-    /// A bare argument is a file path.
-    #[arg(required = true, value_name = "SOURCE")]
+    /// Sources to follow: `<path>`, `file:<path>`, `cmd:<command>`,
+    /// `docker:<container>`, `compose:[svc,…]`, `k8s:<target> [kubectl args]`,
+    /// `journal:[unit]`, `-` (stdin).
+    #[arg(required_unless_present = "config", value_name = "SOURCE")]
     pub sources: Vec<SourceSpec>,
 
-    /// Lines kept in memory per source (scrollback size).
-    #[arg(long, default_value_t = 10_000, value_name = "N")]
-    pub history: usize,
+    /// TOML file listing sources (`[[source]]` tables) and options.
+    #[arg(short, long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
+    /// Lines kept in memory per source (scrollback size) [default: 10000].
+    #[arg(long, value_name = "N")]
+    pub history: Option<usize>,
 
     /// Existing lines shown when a source starts [default: enough to fill its pane].
     #[arg(short = 'n', long, value_name = "N")]
@@ -43,8 +48,9 @@ mod tests {
     }
 
     #[test]
-    fn requires_a_source() {
+    fn requires_a_source_or_a_config() {
         assert!(Cli::try_parse_from(["mtr"]).is_err());
+        assert!(Cli::try_parse_from(["mtr", "-c", "x.toml"]).is_ok());
     }
 
     #[test]

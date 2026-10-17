@@ -67,11 +67,14 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
         None => ("starting".to_string(), MUTED),
         Some(s @ SourceStatus::Running) => (s.to_string(), OK),
         Some(s @ SourceStatus::Waiting(_)) => (s.to_string(), WARN),
-        Some(s @ SourceStatus::Exited(Some(0))) => (s.to_string(), MUTED),
+        Some(s @ (SourceStatus::Exited(Some(0)) | SourceStatus::Ended)) => (s.to_string(), MUTED),
         Some(s) => (s.to_string(), BAD),
     };
     let badge = format!(" {} ", index + 1);
-    let status = format!("● {status}");
+    let status = match pane.restarts {
+        0 => format!("● {status}"),
+        n => format!("● {status} ↻{n}"),
+    };
     // The name gives way first, so the status always stays visible.
     let name_room = (area.width as usize).saturating_sub(badge.len() + status.chars().count() + 2);
     let left = Line::from(vec![

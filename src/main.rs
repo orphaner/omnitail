@@ -1,3 +1,5 @@
+use std::sync::mpsc;
+use std::thread;
 use anyhow::Result;
 use crate::app::App;
 use crate::ui::Ui;
@@ -5,6 +7,7 @@ use crate::ui::Ui;
 mod v1;
 mod ui;
 mod app;
+mod yo;
 
 fn main() -> Result<()> {
     let file_paths = vec![
@@ -15,11 +18,15 @@ fn main() -> Result<()> {
     // let mut app = TailApp::new(file_paths[0].clone());
     // app.run();
 
-    v1::run(&file_paths[1])?;
-    // v0::run()?;
+    let (tx, rx) = mpsc::channel();
+
+    thread::spawn(move || {
+        v1::run(&file_paths[1], tx).unwrap();
+        // v0::run()?;
+    });
 
     let app = App {};
     let mut ui = Ui::new(app);
-    ui.run()?;
+    ui.run(rx)?;
     Ok(())
 }

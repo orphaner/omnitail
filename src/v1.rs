@@ -6,8 +6,9 @@ use std::io;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::sync::mpsc;
+use std::sync::mpsc::{Sender};
 
-pub fn run(file_path: &str) -> Result<()> {
+pub fn run(file_path: &str, tx: Sender<String>) -> Result<()> {
 
     // Créer un tracker d'offsets
     let offset_tracker2 = &mut OffsetTracker::new();

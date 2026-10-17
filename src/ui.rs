@@ -10,6 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState};
 use ratatui::{DefaultTerminal, Frame};
 use std::rc::Rc;
+use std::sync::mpsc::Receiver;
 use tracing::info;
 
 #[derive(Default)]
@@ -25,15 +26,15 @@ impl Ui {
         Self::default()
     }
 
-    pub fn run(&mut self) -> anyhow::Result<()> {
+    pub fn run(&mut self, rx: Receiver<String>) -> anyhow::Result<()> {
         info!("hello from run");
         let terminal = ratatui::init();
-        self.start_loop(terminal)?;
+        self.start_loop(terminal, rx)?;
         ratatui::restore();
         Ok(())
     }
 
-    fn start_loop(&mut self, mut terminal: DefaultTerminal) -> anyhow::Result<()> {
+    fn start_loop(&mut self, mut terminal: DefaultTerminal, rx: Receiver<String>) -> anyhow::Result<()> {
         let tick_rate = std::time::Duration::from_millis(250);
         let mut last_tick = std::time::Instant::now();
         loop {
@@ -45,7 +46,7 @@ impl Ui {
                     }
                 }
             }
-            if (last_tick.elapsed() >= tick_rate) {
+            if last_tick.elapsed() >= tick_rate {
                 last_tick = std::time::Instant::now();
             }
         }
@@ -126,14 +127,14 @@ impl Ui {
 }
 
 
-const DARK_BLUE: Color = Color::Rgb(16, 24, 48);
-const LIGHT_BLUE: Color = Color::Rgb(64, 96, 192);
-const LIGHT_YELLOW: Color = Color::Rgb(192, 192, 96);
-const LIGHT_GREEN: Color = Color::Rgb(64, 192, 96);
-const LIGHT_RED: Color = Color::Rgb(192, 96, 96);
-const RED: Color = Color::Rgb(215, 0, 0);
+// const DARK_BLUE: Color = Color::Rgb(16, 24, 48);
+// const LIGHT_BLUE: Color = Color::Rgb(64, 96, 192);
+// const LIGHT_YELLOW: Color = Color::Rgb(192, 192, 96);
+// const LIGHT_GREEN: Color = Color::Rgb(64, 192, 96);
+// const LIGHT_RED: Color = Color::Rgb(192, 96, 96);
+// const RED: Color = Color::Rgb(215, 0, 0);
 const BLACK: Color = Color::Rgb(8, 8, 8); // not really black, often #080808
 const DARK_GRAY: Color = Color::Rgb(68, 68, 68);
-const MID_GRAY: Color = Color::Rgb(128, 128, 128);
-const LIGHT_GRAY: Color = Color::Rgb(188, 188, 188);
-const WHITE: Color = Color::Rgb(238, 238, 238); // not really white, often #eeeeee
+// const MID_GRAY: Color = Color::Rgb(128, 128, 128);
+// const LIGHT_GRAY: Color = Color::Rgb(188, 188, 188);
+// const WHITE: Color = Color::Rgb(238, 238, 238); // not really white, often #eeeeee

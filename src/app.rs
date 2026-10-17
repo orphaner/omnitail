@@ -79,6 +79,8 @@ pub struct Scrollback {
     /// Only lines matching this are shown (`&`).
     pub filter: Option<Pattern>,
     pub search: Option<Search>,
+    /// While paused (`p`), the view ends at this position.
+    pub paused: Option<Pos>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,11 +94,17 @@ pub struct Search {
 
 impl Scrollback {
     fn new(target: Target, filter: Option<Pattern>) -> Self {
-        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None }
+        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None }
     }
 
     pub fn view<'a>(&'a self, panes: &'a [Pane]) -> HistoryView<'a> {
-        HistoryView::new(panes, &self.target, self.filter.as_ref())
+        HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused)
+    }
+
+    /// Lines that arrived since the view was paused.
+    pub fn arrived_since_pause(&self, panes: &[Pane]) -> Option<u64> {
+        let end = HistoryView::new(panes, &self.target, None).end();
+        self.paused.map(|p| end.saturating_sub(p))
     }
 }
 
@@ -379,6 +387,12 @@ impl App {
                 sb.hscroll = 0;
             }
             KeyCode::Char('t') => self.times = !self.times,
+            KeyCode::Char('p') => {
+                sb.paused = match sb.paused {
+                    Some(_) => None,
+                    None => Some(HistoryView::new(&self.panes, &sb.target, None).end()),
+                }
+            }
             KeyCode::Char('/') | KeyCode::Char('?') => {
                 let forward = key.code == KeyCode::Char('/');
                 self.prompt = Some(Prompt::new(PromptKind::Search { forward }, String::new()));
@@ -1022,6 +1036,22 @@ mod tests {
         press(&mut a, KeyCode::Char('q'));
         press(&mut a, KeyCode::Char('t'));
         assert!(a.times);
+    }
+
+    #[test]
+    fn pause_in_history_views() {
+        for key in ['b', 'B'] {
+            let mut a = app(1);
+            press(&mut a, KeyCode::Char(key));
+            press(&mut a, KeyCode::Char('p'));
+            a.ingest(0, line("late"));
+            let Mode::Scrollback(sb) = &a.mode else { panic!() };
+            assert_eq!(sb.view(&a.panes).end(), 5, "{key}: frozen");
+            assert_eq!(sb.arrived_since_pause(&a.panes), Some(1));
+            press(&mut a, KeyCode::Char('p'));
+            let Mode::Scrollback(sb) = &a.mode else { panic!() };
+            assert_eq!(sb.view(&a.panes).end(), 6, "{key}: resumed");
+        }
     }
 
     #[test]

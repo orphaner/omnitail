@@ -29,6 +29,9 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
         Some(c) => format!("line {}", c + 1),
     };
     let mut details = Vec::new();
+    if let Some(n) = sb.arrived_since_pause(panes) {
+        details.push(format!("⏸ paused +{n}"));
+    }
     if let Some(s) = &sb.search {
         details.push(if s.total > 0 { format!("match {}/{}", s.rank, s.total) } else { format!("/{}", s.pattern.text) });
     }
@@ -36,7 +39,13 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
         details.push(format!("filter: {}", f.text));
     }
     let details = details.iter().map(|d| format!("{d} · ")).collect::<String>();
-    let right = [format!("scrollback · {details}{position}"), format!("{details}{position}"), position.clone()];
+    let paused = sb.arrived_since_pause(panes).map(|n| format!("⏸ +{n} · ")).unwrap_or_default();
+    let right = [
+        format!("scrollback · {details}{position}"),
+        format!("{details}{position}"),
+        format!("{paused}{position}"),
+        position.clone(),
+    ];
     match &sb.target {
         crate::view::Target::Pane(p) => super::render_title(frame, title, *p, &panes[*p], &right),
         crate::view::Target::Merged(_) => {

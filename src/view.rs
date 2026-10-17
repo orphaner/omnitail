@@ -62,11 +62,18 @@ pub struct HistoryView<'a> {
     panes: &'a [Pane],
     target: &'a Target,
     filter: Option<&'a Pattern>,
+    /// Paused views end here, whatever arrived since.
+    until: Option<Pos>,
 }
 
 impl<'a> HistoryView<'a> {
     pub fn new(panes: &'a [Pane], target: &'a Target, filter: Option<&'a Pattern>) -> Self {
-        Self { panes, target, filter }
+        Self { panes, target, filter, until: None }
+    }
+
+    /// The same view, ending at `until` when set (a paused view).
+    pub fn until(self, until: Option<Pos>) -> Self {
+        Self { until, ..self }
     }
 
     pub fn is_merged(&self) -> bool {
@@ -83,14 +90,18 @@ impl<'a> HistoryView<'a> {
 
     /// One past the newest position.
     pub fn end(&self) -> Pos {
-        match self.target {
+        let end = match self.target {
             Target::Pane(p) => self.panes[*p].buffer.end_seq(),
             Target::Merged(m) => m.base + m.entries.len() as Pos,
-        }
+        };
+        self.until.map_or(end, |u| u.clamp(self.first(), end))
     }
 
     /// The line at `pos`, filter ignored.
     pub fn line(&self, pos: Pos) -> Option<ViewLine<'a>> {
+        if pos >= self.end() {
+            return None;
+        }
         let (pane, seq) = match self.target {
             Target::Pane(p) => (*p, pos),
             Target::Merged(m) => *m.entries.get(usize::try_from(pos.checked_sub(m.base)?).ok()?)?,
@@ -209,6 +220,18 @@ mod tests {
         assert_eq!(view.next(2, false), Some(0));
         assert_eq!(view.resolve(Some(1)), Some(0), "hidden cursor snaps to a visible line");
         assert_eq!(view.resolve(None), Some(2));
+    }
+
+    #[test]
+    fn paused_view_ends_where_it_was_paused() {
+        let mut app = app();
+        let target = Target::Pane(0);
+        let view = HistoryView::new(&app.panes, &target, None).until(Some(2));
+        assert_eq!(texts(&view), ["a0 info", "a1 error"]);
+        assert_eq!(view.last_visible(), Some(1));
+        app.ingest(0, SourceEvent::Line("a3".into()));
+        let view = HistoryView::new(&app.panes, &target, None).until(Some(2));
+        assert_eq!(view.end(), 2, "new lines stay out");
     }
 
     #[test]

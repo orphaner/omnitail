@@ -89,7 +89,7 @@ pub struct SourceOptions {
     pub initial_lines: usize,
 }
 
-pub fn build(spec: &SourceSpec, opts: &SourceOptions) -> Box<dyn Source> {
+pub fn build(spec: &SourceSpec, opts: SourceOptions) -> Box<dyn Source> {
     match spec {
         SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), opts.initial_lines)),
         SourceSpec::Cmd { command } => Box::new(CommandSource::shell(command)),

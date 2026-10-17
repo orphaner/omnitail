@@ -17,9 +17,9 @@ pub struct Cli {
     #[arg(long, default_value_t = 10_000, value_name = "N")]
     pub history: usize,
 
-    /// Existing lines shown when a source starts.
-    #[arg(short = 'n', long, default_value_t = 10, value_name = "N")]
-    pub lines: usize,
+    /// Existing lines shown when a source starts [default: enough to fill its pane].
+    #[arg(short = 'n', long, value_name = "N")]
+    pub lines: Option<usize>,
 
     /// Strip ANSI colors instead of rendering them.
     #[arg(long)]
@@ -37,7 +37,7 @@ mod tests {
     #[test]
     fn parses_sources_and_options() {
         let cli = Cli::try_parse_from(["mtr", "-n", "50", "a.log", "cmd:ping x", "docker:db"]).unwrap();
-        assert_eq!(cli.lines, 50);
+        assert_eq!(cli.lines, Some(50));
         assert_eq!(cli.sources.len(), 3);
         assert_eq!(cli.sources[1], SourceSpec::Cmd { command: "ping x".into() });
     }

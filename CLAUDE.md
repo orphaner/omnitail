@@ -39,4 +39,4 @@ The data flows one way: **sources → bounded mpsc channel → `App` state → `
 
 ## Roadmap context
 
-Milestone 1 (above) is done. Explicitly deferred: loading the TOML source file, search and regex filters, `B` (merged scrollback), native docker and kubernetes, other layouts, mtr's own coloring, mouse support.
+Milestone 1 (above) is done. Explicitly deferred: loading the TOML source file, search and regex filters, `B` (merged scrollback), native docker and kubernetes, other layouts (first idea: shrink empty or waiting panes), mtr's own coloring, mouse support.

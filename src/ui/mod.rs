@@ -32,8 +32,19 @@ const WARN: Color = Color::Indexed(221); // #ffd75f
 const BAD: Color = Color::Indexed(203); // #ff5f5f
 const MUTED: Color = Color::Indexed(247); // #9e9e9e
 
+fn split_screen(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area)
+}
+
+/// Rows of content each pane gets on a screen of `size`, computed with the
+/// same layout as [`draw`], so sources can load just enough history.
+pub fn pane_body_heights(size: Rect, panes: usize) -> Vec<usize> {
+    let [main, _] = split_screen(size);
+    Stacked.areas(main, panes).iter().map(|a| pane::body(*a).height as usize).collect()
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let [main, status_bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+    let [main, status_bar] = split_screen(frame.area());
 
     match &mut app.mode {
         Mode::Scrollback(sb) => scrollback::render(frame, main, sb, &app.panes[sb.pane], app.strip_ansi),
@@ -161,6 +172,12 @@ mod tests {
         app.ingest(1, SourceEvent::Line("\x1b[31mpong\x1b[0m".into()));
         app.ingest(1, SourceEvent::Status(SourceStatus::Exited(Some(1))));
         app
+    }
+
+    #[test]
+    fn body_heights_match_rendered_panes() {
+        // 12 rows: 11 for panes, so 6 + 5, minus one title row each.
+        assert_eq!(pane_body_heights(Rect::new(0, 0, 50, 12), 2), [5, 4]);
     }
 
     #[test]

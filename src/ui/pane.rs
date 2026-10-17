@@ -7,8 +7,17 @@ use super::text;
 use crate::app::Pane;
 use crate::buffer::{Buffer, Seq};
 
+fn split(area: Rect) -> [Rect; 2] {
+    Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area)
+}
+
+/// Where a pane's lines go, below its title.
+pub fn body(area: Rect) -> Rect {
+    split(area)[1]
+}
+
 pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, strip: bool) {
-    let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+    let [title, body] = split(area);
     let hidden = pane.buffer.view_start() - pane.buffer.first_seq();
     let mut right = super::lines_count(pane.buffer.len());
     if hidden > 0 {

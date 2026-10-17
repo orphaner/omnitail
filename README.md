@@ -20,7 +20,7 @@ Sources:
 | `cmd:'command'` | stdout and stderr of a shell command |
 | `docker:container` | `docker logs --follow` of a container |
 
-Options: `-n/--lines N` (existing lines shown at start, 10 by default), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi`, `--log-file PATH`.
+Options: `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi`, `--log-file PATH`.
 
 ## Keys
 

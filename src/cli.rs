@@ -11,7 +11,7 @@ pub struct Cli {
     /// Sources to follow: `<path>`, `file:<path>`, `cmd:<command>`,
     /// `docker:<container>` (or `d:`), `compose:[svc,…]` (or `dc:`), `k8s:<target> [kubectl args]`,
     /// `journal:[unit]`, `-` (stdin).
-    #[arg(required_unless_present = "config", value_name = "SOURCE")]
+    #[arg(required_unless_present_any = ["config", "list_schemes"], value_name = "SOURCE")]
     pub sources: Vec<SourceSpec>,
 
     /// TOML file listing sources (`[[source]]` tables) and options.
@@ -33,6 +33,10 @@ pub struct Cli {
     /// Start with mtr's own coloring off (toggle with c/C).
     #[arg(long)]
     pub no_color: bool,
+
+    /// List the color schemes (with those of --config) and exit.
+    #[arg(long)]
+    pub list_schemes: bool,
 
     /// Where mtr writes its own logs (level set by MTR_LOG, default `info`).
     #[arg(long, value_name = "PATH", default_value_os_t = std::env::temp_dir().join("mtr.log"))]

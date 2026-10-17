@@ -17,7 +17,7 @@ regex = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1.53.3", features = ["full"] }
-toml = "1.1.8"
+toml = { version = "1.1.8", features = ["preserve_order"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 unicode-width = "0.2"

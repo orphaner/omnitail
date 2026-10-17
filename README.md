@@ -32,10 +32,14 @@ Sources can also be listed in a TOML file, `mtr -c stack.toml`, with per-source 
 
 mtr colors log lines itself: levels, timestamps, IPs, URLs, UUIDs and durations stand out. Each source's format is guessed from its first lines, then the matching scheme is used: `http` (nginx/apache access logs), `json`, `logfmt` or `syslog`, falling back on `generic`. Lines that already carry their own ANSI colors keep them.
 
+mtr also ships 62 schemes converted from [multitail](https://github.com/folkertvanheusden/multitail) (ssh, postfix, exim, dovecot, fail2ban, apache, squid, bind, mysql, log4j, cisco_ios…): `mtr --list-schemes` lists them all. Files whose path a scheme claims get it automatically (e.g. `/var/log/fail2ban.log` → `f2b`, `/var/log/mail/` → `postfix`).
+
 In a config file, a source can pick its scheme(s) explicitly (`scheme = "http"`, `scheme = ["mine", "generic"]`, or `scheme = "none"`), and you can define your own:
 
 ```toml
 [scheme.mine]
+description = "my app"                   # shown by --list-schemes
+paths = ['/var/log/myapp/']              # files picking this scheme by default
 rules = [
   { regex = 'user=(\w+)', group = 1, style = "yellow bold" },  # group 0 (default) = whole match
   { regex = 'payment failed', style = "fg:white bg:160 bold" },

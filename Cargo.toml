@@ -15,6 +15,7 @@ notify = "8.2.0"
 ratatui = "0.30.2"
 regex = "1"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1.53.3", features = ["full"] }
 toml = "1.1.8"
 tracing = "0.1.44"

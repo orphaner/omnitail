@@ -54,6 +54,11 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 | `Ctrl+C` | quit from anywhere |
 | `N` | clear all panes (the history is kept) |
 | `n` | choose one pane to clear |
-| `b` | choose a pane and browse its whole history, including what was cleared (`j`/`k`, `PgUp`/`PgDn`, `g`/`G`) |
-| `C` | mtr's coloring on/off for all panes |
-| `c` | choose one pane to turn coloring on/off |
+| `b` | choose a pane and browse its whole history, including what was cleared |
+| `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
+| `C` / `c` | mtr's coloring on/off for all panes / one pane |
+| `w` | wrap long lines at word boundaries, or cut them (`›`) |
+
+Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
+
+In the history view (`b`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`). `y` copies the line to the clipboard (OSC 52, which also works over SSH in supporting terminals).

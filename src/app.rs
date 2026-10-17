@@ -1,6 +1,9 @@
 //! Application state and the event loop. Keys and source events change the
 //! state here; `ui` only draws it.
 
+use std::io::Write;
+use std::sync::Arc;
+
 use anyhow::Result;
 use chrono::Local;
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
@@ -8,10 +11,8 @@ use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
-use std::sync::Arc;
-
 use crate::buffer::{Buffer, Seq};
-use crate::color::{Library, PaneColor};
+use crate::color::{Library, PaneColor, Scheme};
 use crate::source::{SourceEvent, SourceId, SourceStatus};
 
 pub struct Pane {
@@ -22,6 +23,23 @@ pub struct Pane {
     pub restarts: u32,
     pub color: PaneColor,
     pub buffer: Buffer,
+    /// While paused, the pane shows lines before this one; the buffer
+    /// keeps receiving.
+    pub paused: Option<Seq>,
+}
+
+impl Pane {
+    /// One past the last line the pane shows.
+    pub fn view_end(&self) -> Seq {
+        self.paused.unwrap_or(self.buffer.end_seq()).min(self.buffer.end_seq())
+    }
+
+    fn toggle_pause(&mut self) {
+        self.paused = match self.paused {
+            Some(_) => None,
+            None => Some(self.buffer.end_seq()),
+        };
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +47,7 @@ pub enum SelectPurpose {
     Scrollback,
     Clear,
     Color,
+    Pause,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,17 +56,36 @@ pub enum Mode {
     /// Popup asking which pane an action applies to.
     Select { purpose: SelectPurpose, selected: usize },
     Scrollback(Scrollback),
+    Detail(Detail),
 }
 
-/// Full-screen view of one pane's whole history.
+/// Full-screen view of one pane's whole history, with a line cursor.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Scrollback {
     pub pane: usize,
-    /// Line at the top of the screen; `None` follows the end. The renderer
-    /// clamps it and switches back to following once the end is visible.
-    pub top: Option<Seq>,
-    /// Written by the renderer: what was actually on screen last frame.
-    pub shown_top: Seq,
+    /// Selected line; `None` sits on the last line and follows new ones.
+    pub cursor: Option<Seq>,
+    /// Written by the renderer: first line on screen, and screen height.
+    pub top: Seq,
+    pub page: usize,
+    /// Columns scrolled to the right when lines are not wrapped.
+    pub hscroll: usize,
+}
+
+impl Scrollback {
+    fn new(pane: usize) -> Self {
+        Self { pane, cursor: None, top: 0, page: 0, hscroll: 0 }
+    }
+}
+
+/// One line on its own, JSON pretty-printed; back to `back` on exit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Detail {
+    pub back: Scrollback,
+    pub seq: Seq,
+    pub scroll: usize,
+    /// Written by the renderer.
+    pub max_scroll: usize,
     pub page: usize,
 }
 
@@ -55,18 +93,41 @@ pub struct App {
     pub panes: Vec<Pane>,
     pub mode: Mode,
     pub strip_ansi: bool,
+    /// Wrap long lines, or cut them (`w`).
+    pub wrap: bool,
     pub quit: bool,
+    /// Shown in the key bar until the next key.
+    pub notice: Option<String>,
+    /// Text for the terminal clipboard, sent by the event loop.
+    pub clipboard: Option<String>,
     library: Arc<Library>,
 }
+
+/// Columns moved by ←/→ when lines are cut.
+const HSCROLL_STEP: usize = 8;
 
 impl App {
     /// One pane per `(name, color)`, in source order.
     pub fn new(panes: Vec<(String, PaneColor)>, library: Arc<Library>, history: usize, strip_ansi: bool) -> Self {
         let panes = panes
             .into_iter()
-            .map(|(name, color)| Pane { name, status: None, restarts: 0, color, buffer: Buffer::new(history) })
+            .map(|(name, color)| Pane { name, status: None, restarts: 0, color, buffer: Buffer::new(history), paused: None })
             .collect();
-        Self { panes, mode: Mode::Panes, strip_ansi, quit: false, library }
+        Self {
+            panes,
+            mode: Mode::Panes,
+            strip_ansi,
+            wrap: true,
+            quit: false,
+            notice: None,
+            clipboard: None,
+            library,
+        }
+    }
+
+    /// A scheme by name, for views that need a specific one (JSON details).
+    pub fn scheme(&self, name: &str) -> Option<Arc<Scheme>> {
+        self.library.resolve(&[name.into()]).ok()
     }
 
     /// Panes with automatic coloring, for tests.
@@ -106,6 +167,7 @@ impl App {
         if key.kind != KeyEventKind::Press {
             return;
         }
+        self.notice = None;
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             self.quit = true;
             return;
@@ -125,6 +187,17 @@ impl App {
                     let on = !self.panes.iter().any(|p| p.color.active().is_some());
                     self.panes.iter_mut().filter(|p| p.color.available()).for_each(|p| p.color.enabled = on);
                 }
+                KeyCode::Char('p') => self.select(SelectPurpose::Pause),
+                KeyCode::Char('P') => {
+                    // Pause everything unless everything is already paused.
+                    let pause = self.panes.iter().any(|p| p.paused.is_none());
+                    for p in &mut self.panes {
+                        if p.paused.is_none() == pause {
+                            p.toggle_pause();
+                        }
+                    }
+                }
+                KeyCode::Char('w') => self.wrap = !self.wrap,
                 _ => {}
             },
             Mode::Select { purpose, selected } => {
@@ -148,23 +221,70 @@ impl App {
                 }
             }
             Mode::Scrollback(sb) => {
-                let first = self.panes[sb.pane].buffer.first_seq();
-                let current = sb.top.unwrap_or(sb.shown_top);
+                let buffer = &self.panes[sb.pane].buffer;
+                let (first, end) = (buffer.first_seq(), buffer.end_seq());
+                let last = end.saturating_sub(1).max(first);
+                let current = sb.cursor.unwrap_or(last).clamp(first, last);
                 let page = sb.page.max(1) as Seq;
+                // Reaching the last line goes back to following new ones.
+                let down = |n: Seq| if current + n >= last { None } else { Some(current + n) };
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => self.mode = Mode::Panes,
-                    KeyCode::Up | KeyCode::Char('k') => sb.top = Some(current.saturating_sub(1).max(first)),
-                    KeyCode::Down | KeyCode::Char('j') => sb.top = sb.top.map(|t| t + 1),
-                    KeyCode::PageUp | KeyCode::Char('u') => sb.top = Some(current.saturating_sub(page).max(first)),
-                    KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char(' ') => {
-                        sb.top = sb.top.map(|t| t + page)
+                    KeyCode::Up | KeyCode::Char('k') => sb.cursor = Some(current.saturating_sub(1).max(first)),
+                    KeyCode::Down | KeyCode::Char('j') => sb.cursor = down(1),
+                    KeyCode::PageUp | KeyCode::Char('u') => sb.cursor = Some(current.saturating_sub(page).max(first)),
+                    KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char(' ') => sb.cursor = down(page),
+                    KeyCode::Home | KeyCode::Char('g') => sb.cursor = Some(first),
+                    KeyCode::End | KeyCode::Char('G') => sb.cursor = None,
+                    KeyCode::Left | KeyCode::Char('h') if !self.wrap => {
+                        sb.hscroll = sb.hscroll.saturating_sub(HSCROLL_STEP)
                     }
-                    KeyCode::Home | KeyCode::Char('g') => sb.top = Some(first),
-                    KeyCode::End | KeyCode::Char('G') => sb.top = None,
+                    KeyCode::Right | KeyCode::Char('l') if !self.wrap => sb.hscroll += HSCROLL_STEP,
+                    KeyCode::Char('w') => {
+                        self.wrap = !self.wrap;
+                        sb.hscroll = 0;
+                    }
+                    KeyCode::Enter if first < end => {
+                        let back = sb.clone();
+                        self.mode = Mode::Detail(Detail { back, seq: current, scroll: 0, max_scroll: 0, page: 0 });
+                    }
+                    KeyCode::Char('y') if first < end => {
+                        let text = buffer.get(current).map(crate::ui::plain_text);
+                        self.copy(text);
+                    }
+                    _ => {}
+                }
+            }
+            Mode::Detail(d) => {
+                let page = d.page.max(1);
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+                        self.mode = Mode::Scrollback(d.back.clone())
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => d.scroll = d.scroll.saturating_sub(1),
+                    KeyCode::Down | KeyCode::Char('j') => d.scroll = (d.scroll + 1).min(d.max_scroll),
+                    KeyCode::PageUp | KeyCode::Char('u') => d.scroll = d.scroll.saturating_sub(page),
+                    KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char(' ') => {
+                        d.scroll = (d.scroll + page).min(d.max_scroll)
+                    }
+                    KeyCode::Home | KeyCode::Char('g') => d.scroll = 0,
+                    KeyCode::End | KeyCode::Char('G') => d.scroll = d.max_scroll,
+                    KeyCode::Char('y') => {
+                        let text = self.panes[d.back.pane].buffer.get(d.seq).map(crate::ui::plain_text);
+                        self.copy(text);
+                    }
                     _ => {}
                 }
             }
         }
+    }
+
+    fn copy(&mut self, text: Option<String>) {
+        self.notice = Some(match text {
+            Some(_) => "copied to clipboard".into(),
+            None => "line no longer in history".into(),
+        });
+        self.clipboard = text;
     }
 
     /// Opens the pane picker, or applies right away when there is no choice.
@@ -182,8 +302,10 @@ impl App {
                 self.panes[pane].buffer.clear_view(Local::now(), "cleared");
                 self.mode = Mode::Panes;
             }
-            SelectPurpose::Scrollback => {
-                self.mode = Mode::Scrollback(Scrollback { pane, top: None, shown_top: 0, page: 0 });
+            SelectPurpose::Scrollback => self.mode = Mode::Scrollback(Scrollback::new(pane)),
+            SelectPurpose::Pause => {
+                self.panes[pane].toggle_pause();
+                self.mode = Mode::Panes;
             }
             SelectPurpose::Color => {
                 let color = &mut self.panes[pane].color;
@@ -215,6 +337,9 @@ pub async fn run(
             input_event = input.next() => match input_event {
                 Some(Ok(Event::Key(key))) => {
                     app.handle_key(key);
+                    if let Some(text) = app.clipboard.take() {
+                        copy_to_clipboard(&text)?;
+                    }
                     dirty = true;
                 }
                 Some(Ok(Event::Resize(..))) => dirty = true,
@@ -236,6 +361,30 @@ pub async fn run(
         }
     }
     Ok(())
+}
+
+/// Asks the terminal to put `text` in the system clipboard (OSC 52). Works
+/// over SSH; terminals that do not support it ignore the sequence.
+fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+    let mut out = std::io::stdout();
+    write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
+    out.flush()
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }
 
 /// SIGTERM, SIGHUP (terminal closed) and SIGINT end mtr like `q` does, so
@@ -362,7 +511,7 @@ mod tests {
 
         press(&mut a, KeyCode::Char('b'));
         press(&mut a, KeyCode::Char('2'));
-        assert!(matches!(a.mode, Mode::Scrollback(Scrollback { pane: 1, top: None, .. })));
+        assert!(matches!(a.mode, Mode::Scrollback(Scrollback { pane: 1, cursor: None, .. })));
     }
 
     #[test]
@@ -372,29 +521,107 @@ mod tests {
         assert!(matches!(a.mode, Mode::Scrollback(Scrollback { pane: 0, .. })));
     }
 
+    fn cursor(a: &App) -> Option<Seq> {
+        match &a.mode {
+            Mode::Scrollback(sb) => sb.cursor,
+            m => panic!("not in scrollback: {m:?}"),
+        }
+    }
+
     #[test]
-    fn scrollback_navigation() {
+    fn scrollback_cursor_navigation() {
+        // 5 lines (0..5): following means the cursor sits on line 4.
         let mut a = app(1);
         press(&mut a, KeyCode::Char('b'));
         if let Mode::Scrollback(sb) = &mut a.mode {
-            sb.shown_top = 3; // as if the renderer showed lines 3..5
-            sb.page = 2;
+            sb.page = 2; // as if the renderer had a 2-row screen
         }
-        let top = |a: &App| match &a.mode {
-            Mode::Scrollback(sb) => sb.top,
-            _ => panic!("left scrollback"),
-        };
         press(&mut a, KeyCode::Char('k'));
-        assert_eq!(top(&a), Some(2));
+        assert_eq!(cursor(&a), Some(3));
         press(&mut a, KeyCode::PageUp);
-        assert_eq!(top(&a), Some(0));
-        press(&mut a, KeyCode::Char('k'));
-        assert_eq!(top(&a), Some(0), "clamped at oldest line");
+        assert_eq!(cursor(&a), Some(1));
+        press(&mut a, KeyCode::PageUp);
+        assert_eq!(cursor(&a), Some(0), "clamped at oldest line");
         press(&mut a, KeyCode::Char('j'));
-        assert_eq!(top(&a), Some(1));
+        assert_eq!(cursor(&a), Some(1));
+        press(&mut a, KeyCode::PageDown);
+        assert_eq!(cursor(&a), Some(3));
+        press(&mut a, KeyCode::Char('j'));
+        assert_eq!(cursor(&a), None, "last line: following again");
+        press(&mut a, KeyCode::Char('g'));
+        assert_eq!(cursor(&a), Some(0));
         press(&mut a, KeyCode::Char('G'));
-        assert_eq!(top(&a), None);
+        assert_eq!(cursor(&a), None);
         press(&mut a, KeyCode::Char('q'));
         assert_eq!(a.mode, Mode::Panes);
+    }
+
+    #[test]
+    fn detail_opens_on_cursor_line_and_returns_there() {
+        let mut a = app(1);
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('k'));
+        press(&mut a, KeyCode::Enter);
+        let Mode::Detail(d) = &mut a.mode else { panic!("{:?}", a.mode) };
+        assert_eq!(d.seq, 3);
+        d.max_scroll = 1;
+        press(&mut a, KeyCode::Char('j'));
+        press(&mut a, KeyCode::Char('j'));
+        assert!(matches!(&a.mode, Mode::Detail(d) if d.scroll == 1), "scroll clamped");
+        press(&mut a, KeyCode::Esc);
+        assert_eq!(cursor(&a), Some(3));
+    }
+
+    #[test]
+    fn copy_sends_plain_text_to_clipboard() {
+        let mut a = app(1);
+        a.ingest(0, SourceEvent::Line("\x1b[31mred\x1b[0m line".into()));
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('y'));
+        assert_eq!(a.clipboard.as_deref(), Some("red line"));
+        assert!(a.notice.is_some());
+        press(&mut a, KeyCode::Char('k'));
+        assert!(a.notice.is_none(), "notice lasts until the next key");
+    }
+
+    #[test]
+    fn base64_encoding() {
+        assert_eq!(base64(b""), "");
+        assert_eq!(base64(b"f"), "Zg==");
+        assert_eq!(base64(b"fo"), "Zm8=");
+        assert_eq!(base64(b"foo"), "Zm9v");
+        assert_eq!(base64("été".as_bytes()), "w6l0w6k=");
+    }
+
+    #[test]
+    fn pause_one_and_all() {
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('p'));
+        press(&mut a, KeyCode::Char('1'));
+        assert_eq!(a.panes[0].paused, Some(5));
+        a.ingest(0, SourceEvent::Line("late".into()));
+        assert_eq!(a.panes[0].view_end(), 5, "paused pane shows nothing new");
+        assert_eq!(a.panes[0].buffer.end_seq(), 6, "but keeps receiving");
+
+        press(&mut a, KeyCode::Char('P'));
+        assert!(a.panes.iter().all(|p| p.paused.is_some()), "P pauses the rest");
+        assert_eq!(a.panes[0].paused, Some(5), "already paused panes keep their point");
+        press(&mut a, KeyCode::Char('P'));
+        assert!(a.panes.iter().all(|p| p.paused.is_none()), "all paused: P resumes all");
+        assert_eq!(a.panes[0].view_end(), 6);
+    }
+
+    #[test]
+    fn wrap_toggle_resets_horizontal_scroll() {
+        let mut a = app(1);
+        press(&mut a, KeyCode::Char('w'));
+        assert!(!a.wrap);
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Right);
+        press(&mut a, KeyCode::Right);
+        assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.hscroll == 2 * HSCROLL_STEP));
+        press(&mut a, KeyCode::Char('w'));
+        assert!(a.wrap);
+        assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.hscroll == 0));
     }
 }

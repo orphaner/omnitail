@@ -1,6 +1,8 @@
-//! Drawing only: everything here reads the [`App`] state, the single
-//! exception being the scrollback writing back what it actually showed.
+//! Drawing only: everything here reads the [`App`] state, the exception
+//! being full-screen views writing back what they actually showed (top
+//! line, page size, scroll bounds) for the next key press.
 
+mod detail;
 mod layout;
 mod pane;
 mod popup;
@@ -31,6 +33,7 @@ const OK: Color = Color::Indexed(114); // #87d787
 const WARN: Color = Color::Indexed(221); // #ffd75f
 const BAD: Color = Color::Indexed(203); // #ff5f5f
 const MUTED: Color = Color::Indexed(247); // #9e9e9e
+const CURSOR_BG: Color = Color::Indexed(238); // #444444, scrollback cursor line
 
 fn split_screen(area: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area)
@@ -46,19 +49,32 @@ pub fn pane_body_heights(size: Rect, panes: usize) -> Vec<usize> {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, status_bar] = split_screen(frame.area());
 
+    let json = app.scheme("json");
     match &mut app.mode {
-        Mode::Scrollback(sb) => scrollback::render(frame, main, sb, &app.panes[sb.pane], app.strip_ansi),
+        Mode::Scrollback(sb) => scrollback::render(frame, main, sb, &app.panes[sb.pane], app.strip_ansi, app.wrap),
+        Mode::Detail(d) => detail::render(frame, main, d, &app.panes[d.back.pane], app.strip_ansi, json.as_deref()),
         Mode::Panes | Mode::Select { .. } => {
             let areas = Stacked.areas(main, app.panes.len());
             for (i, (pane, area)) in app.panes.iter().zip(areas).enumerate() {
-                pane::render(frame, area, i, pane, app.strip_ansi);
+                pane::render(frame, area, i, pane, app.strip_ansi, app.wrap);
             }
         }
     }
     if let Mode::Select { purpose, selected } = app.mode {
         popup::render(frame, main, purpose, selected, &app.panes);
     }
-    render_keys(frame, status_bar, &app.mode);
+    render_keys(frame, status_bar, app);
+}
+
+/// A raw line without its ANSI styling, for copying or parsing.
+pub fn plain_text(raw: &str) -> String {
+    if !raw.contains('\x1b') {
+        return raw.to_owned();
+    }
+    match ansi_to_tui::IntoText::into_text(&raw.as_bytes()) {
+        Ok(text) => text.lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n"),
+        Err(_) => raw.to_owned(),
+    }
 }
 
 /// One-line header: index, name and status on the left, then on the right
@@ -76,12 +92,18 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
         0 => format!("● {status}"),
         n => format!("● {status} ↻{n}"),
     };
+    let paused = match pane.paused {
+        Some(at) => format!(" ⏸ paused +{}", pane.buffer.end_seq().saturating_sub(at)),
+        None => String::new(),
+    };
     // The name gives way first, so the status always stays visible.
-    let name_room = (area.width as usize).saturating_sub(badge.len() + status.chars().count() + 2);
+    let name_room =
+        (area.width as usize).saturating_sub(badge.len() + status.chars().count() + paused.chars().count() + 2);
     let left = Line::from(vec![
         Span::styled(badge, Style::new().fg(WHITE).bg(BADGE_BG).bold()),
         Span::raw(format!(" {} ", ellipsize(&pane.name, name_room))).bold(),
         Span::styled(status, Style::new().fg(color)),
+        Span::styled(paused, Style::new().fg(WARN).bold()),
     ]);
     let style = Style::new().fg(BAR_FG).bg(BAR_BG);
     let left_width = left.width() as u16;
@@ -127,25 +149,39 @@ fn lines_count(n: usize) -> String {
     if n == 1 { "1 line".into() } else { format!("{n} lines") }
 }
 
-fn render_keys(frame: &mut Frame, area: Rect, mode: &Mode) {
-    let keys: &[(&str, &str)] = match mode {
+/// Key hints for the current mode; uppercase keys act on all panes,
+/// lowercase ones on a pane picked in a popup.
+fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
+    let keys: &[(&str, &str)] = match &app.mode {
         Mode::Panes => &[
             ("q", "Quit"),
             ("b", "Scrollback"),
-            ("N", "Clear all"),
-            ("n", "Clear one"),
-            ("C", "Colors all"),
-            ("c", "Colors one"),
+            ("N n", "Clear"),
+            ("P p", "Pause"),
+            ("C c", "Colors"),
+            ("w", "Wrap"),
         ],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],
+        Mode::Scrollback(_) if !app.wrap => &[
+            ("↑↓ jk", "Line"),
+            ("←→ hl", "Scroll"),
+            ("Enter", "Detail"),
+            ("y", "Copy"),
+            ("w", "Wrap"),
+            ("q", "Back"),
+        ],
         Mode::Scrollback(_) => &[
             ("↑↓ jk", "Line"),
             ("PgUp PgDn", "Page"),
             ("g G", "Top/End"),
+            ("Enter", "Detail"),
+            ("y", "Copy"),
+            ("w", "Wrap"),
             ("q", "Back"),
         ],
+        Mode::Detail(_) => &[("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy"), ("q", "Back")],
     };
-    let spans: Vec<Span> = keys
+    let mut spans: Vec<Span> = keys
         .iter()
         .flat_map(|(key, desc)| {
             [
@@ -154,6 +190,9 @@ fn render_keys(frame: &mut Frame, area: Rect, mode: &Mode) {
             ]
         })
         .collect();
+    if let Some(notice) = &app.notice {
+        spans.insert(0, Span::styled(format!(" {notice}  "), Style::new().fg(OK).bold()));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(BAR_BG)), area);
 }
 
@@ -252,6 +291,33 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         let s = screen(&mut app);
         assert_eq!(s.lines().nth(1), Some("a0"), "{s}");
-        assert!(matches!(app.mode, Mode::Scrollback(crate::app::Scrollback { top: Some(0), .. })));
+        assert!(matches!(app.mode, Mode::Scrollback(crate::app::Scrollback { cursor: Some(0), .. })));
+    }
+
+    #[test]
+    fn paused_pane_title_and_frozen_view() {
+        let mut app = demo();
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('1'));
+        app.ingest(0, SourceEvent::Line("late".into()));
+        let s = screen(&mut app);
+        assert!(s.lines().next().unwrap().contains("⏸ paused +1"), "{s}");
+        assert!(!s.contains("late"), "{s}");
+    }
+
+    #[test]
+    fn detail_pretty_prints_json_after_a_prefix() {
+        let mut app = App::with_names(&["api"]);
+        app.ingest(0, SourceEvent::Line(r#"[pod/api] {"level":"error","user":{"id":7}}"#.into()));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+        let s = screen(&mut app);
+        let body: Vec<&str> = s.lines().skip(1).take(8).collect();
+        assert_eq!(
+            body,
+            ["[pod/api]", "{", r#"  "level": "error","#, r#"  "user": {"#, r#"    "id": 7"#, "  }", "}", ""],
+            "{s}"
+        );
+        assert!(s.lines().next().unwrap().contains("line 1 · json"), "{s}");
     }
 }

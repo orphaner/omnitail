@@ -97,6 +97,11 @@ impl Scrollback {
         Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None }
     }
 
+    #[cfg(test)]
+    pub fn for_test() -> Self {
+        Self::new(Target::Pane(0), None)
+    }
+
     pub fn view<'a>(&'a self, panes: &'a [Pane]) -> HistoryView<'a> {
         HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused)
     }
@@ -118,6 +123,14 @@ pub struct Detail {
     /// Written by the renderer.
     pub max_scroll: usize,
     pub page: usize,
+}
+
+/// The key reference screen (`h`), over whatever view is open.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Help {
+    pub scroll: usize,
+    /// Written by the renderer.
+    pub max_scroll: usize,
 }
 
 /// What a line typed in the prompt is for.
@@ -177,6 +190,7 @@ pub struct App {
     /// Highlighted in all panes (`/` on the panes).
     pub highlight: Option<Pattern>,
     pub prompt: Option<Prompt>,
+    pub help: Option<Help>,
     /// Patterns typed so far, oldest first.
     history: Vec<String>,
     pub quit: bool,
@@ -215,6 +229,7 @@ impl App {
             times: false,
             highlight: None,
             prompt: None,
+            help: None,
             history: Vec::new(),
             quit: false,
             notice: None,
@@ -284,6 +299,15 @@ impl App {
         }
         if let Some(prompt) = self.prompt.take() {
             self.prompt_key(prompt, key);
+            return;
+        }
+        if let Some(help) = self.help.take() {
+            self.help_key(help, key);
+            return;
+        }
+        let opens_help = matches!(key.code, KeyCode::Char('h') | KeyCode::F(1));
+        if opens_help && !matches!(self.mode, Mode::Select { .. }) {
+            self.help = Some(Help::default());
             return;
         }
         match std::mem::replace(&mut self.mode, Mode::Panes) {
@@ -380,8 +404,8 @@ impl App {
             KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char(' ') => sb.cursor = down(page),
             KeyCode::Home | KeyCode::Char('g') => sb.cursor = view.first_visible(),
             KeyCode::End | KeyCode::Char('G') => sb.cursor = None,
-            KeyCode::Left | KeyCode::Char('h') if !self.wrap => sb.hscroll = sb.hscroll.saturating_sub(HSCROLL_STEP),
-            KeyCode::Right | KeyCode::Char('l') if !self.wrap => sb.hscroll += HSCROLL_STEP,
+            KeyCode::Left if !self.wrap => sb.hscroll = sb.hscroll.saturating_sub(HSCROLL_STEP),
+            KeyCode::Right if !self.wrap => sb.hscroll += HSCROLL_STEP,
             KeyCode::Char('w') => {
                 self.wrap = !self.wrap;
                 sb.hscroll = 0;
@@ -463,6 +487,18 @@ impl App {
             _ => {}
         }
         self.mode = Mode::Detail(d);
+    }
+
+    fn help_key(&mut self, mut help: Help, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::F(1) => return,
+            KeyCode::Up | KeyCode::Char('k') => help.scroll = help.scroll.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => help.scroll = (help.scroll + 1).min(help.max_scroll),
+            KeyCode::Home | KeyCode::Char('g') => help.scroll = 0,
+            KeyCode::End | KeyCode::Char('G') => help.scroll = help.max_scroll,
+            _ => {}
+        }
+        self.help = Some(help);
     }
 
     fn prompt_key(&mut self, mut prompt: Prompt, key: KeyEvent) {
@@ -1052,6 +1088,33 @@ mod tests {
             let Mode::Scrollback(sb) = &a.mode else { panic!() };
             assert_eq!(sb.view(&a.panes).end(), 6, "{key}: resumed");
         }
+    }
+
+    #[test]
+    fn help_opens_everywhere_and_esc_closes_it() {
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('h'));
+        assert!(a.help.is_some());
+        press(&mut a, KeyCode::Char('q'));
+        assert!(a.help.is_none() && !a.quit, "q closes the help, not mtr");
+
+        press(&mut a, KeyCode::Char('w'));
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Char('h'));
+        assert!(a.help.is_some(), "h is help in history views too, even with cut lines");
+        a.help.as_mut().unwrap().max_scroll = 3;
+        press(&mut a, KeyCode::Char('j'));
+        press(&mut a, KeyCode::Char('G'));
+        assert_eq!(a.help.as_ref().unwrap().scroll, 3);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.help.is_none());
+        assert!(matches!(a.mode, Mode::Scrollback(_)), "back where we were");
+
+        press(&mut a, KeyCode::Char('q'));
+        press(&mut a, KeyCode::Char('n'));
+        press(&mut a, KeyCode::Char('h'));
+        assert!(a.help.is_none(), "not over the pane picker");
     }
 
     #[test]

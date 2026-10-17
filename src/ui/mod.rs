@@ -3,6 +3,7 @@
 //! line, page size, scroll bounds) for the next key press.
 
 mod detail;
+mod help;
 mod layout;
 mod pane;
 mod popup;
@@ -69,6 +70,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let Mode::Select { purpose, selected } = app.mode {
         popup::render(frame, main, purpose, selected, &app.panes);
+    }
+    if let Some(help) = &mut app.help {
+        help::render(frame, frame.area(), help, &app.mode);
+        return;
     }
     match &app.prompt {
         Some(prompt) => render_prompt(frame, status_bar, prompt),
@@ -185,6 +190,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
     let keys: &[(&str, &str)] = match &app.mode {
         Mode::Panes => &[
             ("q", "Quit"),
+            ("h", "Help"),
             ("b B", "History"),
             ("/", "Highlight"),
             ("E e", "Filter"),
@@ -196,6 +202,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],
         Mode::Scrollback(_) if !app.wrap => &[
             ("q", "Back"),
+            ("h", "Help"),
             ("↑↓", "Line"),
             ("←→", "Scroll"),
             ("/ ?", "Search"),
@@ -209,6 +216,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
         ],
         Mode::Scrollback(_) => &[
             ("q", "Back"),
+            ("h", "Help"),
             ("↑↓", "Line"),
             ("g G", "Top/End"),
             ("/ ?", "Search"),
@@ -220,7 +228,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("t", "Time"),
             ("w", "Wrap"),
         ],
-        Mode::Detail(_) => &[("q", "Back"), ("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy")],
+        Mode::Detail(_) => &[("q", "Back"), ("h", "Help"), ("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy")],
     };
     let mut spans: Vec<Span> = keys
         .iter()

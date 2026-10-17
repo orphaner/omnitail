@@ -50,6 +50,7 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 
 | Key | Action |
 |---|---|
+| `h` / `F1` | key reference, for every view (`Esc` closes it) |
 | `q` / `Esc` | quit (or go back from a popup or the scrollback) |
 | `Ctrl+C` | quit from anywhere |
 | `N` | clear all panes (the history is kept) |

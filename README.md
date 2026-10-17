@@ -61,4 +61,4 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
 
-In the history view (`b`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`). `y` copies the line to the clipboard (OSC 52, which also works over SSH in supporting terminals).
+In the history view (`b`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`). `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").

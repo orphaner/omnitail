@@ -279,11 +279,12 @@ impl App {
         }
     }
 
+    /// Queues `text` for the clipboard; the event loop sends it and
+    /// reports how in the notice.
     fn copy(&mut self, text: Option<String>) {
-        self.notice = Some(match text {
-            Some(_) => "copied to clipboard".into(),
-            None => "line no longer in history".into(),
-        });
+        if text.is_none() {
+            self.notice = Some("line no longer in history".into());
+        }
         self.clipboard = text;
     }
 
@@ -338,7 +339,10 @@ pub async fn run(
                 Some(Ok(Event::Key(key))) => {
                     app.handle_key(key);
                     if let Some(text) = app.clipboard.take() {
-                        copy_to_clipboard(&text)?;
+                        app.notice = Some(match copy_to_clipboard(&text) {
+                            Ok(how) => format!("copied to clipboard ({how})"),
+                            Err(e) => format!("copy failed: {e}"),
+                        });
                     }
                     dirty = true;
                 }
@@ -363,12 +367,44 @@ pub async fn run(
     Ok(())
 }
 
-/// Asks the terminal to put `text` in the system clipboard (OSC 52). Works
-/// over SSH; terminals that do not support it ignore the sequence.
-fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
+/// System clipboard tools, tried in order when mtr runs locally.
+const CLIPBOARD_TOOLS: &[&[&str]] = &[
+    &["pbcopy"],
+    &["wl-copy"],
+    &["xclip", "-selection", "clipboard"],
+    &["xsel", "--clipboard", "--input"],
+];
+
+/// Puts `text` in the clipboard and says how. Locally, through the system's
+/// clipboard tool, which works whatever the terminal (iTerm2 ignores OSC 52
+/// unless allowed in its settings). Over SSH, or without such a tool, asks
+/// the terminal with OSC 52: the only way to reach the user's machine.
+fn copy_to_clipboard(text: &str) -> std::io::Result<&'static str> {
+    let over_ssh = std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+    if !over_ssh {
+        for tool in CLIPBOARD_TOOLS {
+            if pipe_to(tool, text).is_ok() {
+                return Ok(tool[0]);
+            }
+        }
+    }
     let mut out = std::io::stdout();
     write!(out, "\x1b]52;c;{}\x07", base64(text.as_bytes()))?;
-    out.flush()
+    out.flush()?;
+    Ok("OSC 52")
+}
+
+fn pipe_to(argv: &[&str], text: &str) -> std::io::Result<()> {
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(argv[0])
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    child.stdin.take().expect("piped").write_all(text.as_bytes())?;
+    let status = child.wait()?;
+    if status.success() { Ok(()) } else { Err(std::io::Error::other(format!("{} failed", argv[0]))) }
 }
 
 fn base64(bytes: &[u8]) -> String {
@@ -579,7 +615,7 @@ mod tests {
         press(&mut a, KeyCode::Char('b'));
         press(&mut a, KeyCode::Char('y'));
         assert_eq!(a.clipboard.as_deref(), Some("red line"));
-        assert!(a.notice.is_some());
+        a.notice = Some("copied".into()); // what the event loop does after sending it
         press(&mut a, KeyCode::Char('k'));
         assert!(a.notice.is_none(), "notice lasts until the next key");
     }

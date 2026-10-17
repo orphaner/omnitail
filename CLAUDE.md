@@ -39,7 +39,7 @@ The data flows one way: **sources → bounded mpsc channel → `App` state → `
 
 ## Keys (multitail-compatible where possible)
 
-`q`/`Esc` quit (or leave a popup or the scrollback), `Ctrl+C` quits from anywhere. `N` clears all panes, `n` opens a picker to clear one. `b` opens a picker, then shows the scrollback (`j`/`k`, `PgUp`/`PgDn`, `g`/`G`). `C`/`c` toggle coloring and `P`/`p` toggle pause. A paused pane freezes at `Pane::paused` while the buffer keeps receiving. Convention: uppercase acts on all panes, lowercase opens the picker for one; this is the opposite of multitail's `p`/`P`, chosen for consistency with `N`/`n`. `w` toggles wrapping. In the scrollback, `Enter` opens the detail view and `y` copies the line through OSC 52 (`App::clipboard`, written by the event loop). With a single pane, the picker is skipped.
+`q`/`Esc` quit (or leave a popup or the scrollback), `Ctrl+C` quits from anywhere. `N` clears all panes, `n` opens a picker to clear one. `b` opens a picker, then shows the scrollback (`j`/`k`, `PgUp`/`PgDn`, `g`/`G`). `C`/`c` toggle coloring and `P`/`p` toggle pause. A paused pane freezes at `Pane::paused` while the buffer keeps receiving. Convention: uppercase acts on all panes, lowercase opens the picker for one; this is the opposite of multitail's `p`/`P`, chosen for consistency with `N`/`n`. `w` toggles wrapping. In the scrollback, `Enter` opens the detail view and `y` copies the line: `App::clipboard` is sent by the event loop through the system tool (`pbcopy`, `wl-copy`, `xclip`, `xsel`) when local, or OSC 52 over SSH or as a last resort. iTerm2 ignores OSC 52 by default, which is why local copies avoid it. With a single pane, the picker is skipped.
 
 ## Demo
 

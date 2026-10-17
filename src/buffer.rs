@@ -11,8 +11,17 @@ use chrono::{DateTime, Local};
 
 pub type Seq = u64;
 
+/// One line and when it arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub text: String,
+    /// Global arrival rank across all sources, to merge them in order.
+    pub arrival: u64,
+    pub at: DateTime<Local>,
+}
+
 pub struct Buffer {
-    lines: VecDeque<String>,
+    lines: VecDeque<Entry>,
     capacity: usize,
     /// Sequence number the next pushed line will get.
     next_seq: Seq,
@@ -40,7 +49,14 @@ impl Buffer {
         }
     }
 
+    /// Appends a line, timestamped now, ranked by its own sequence number.
+    #[cfg(test)]
     pub fn push(&mut self, line: String) {
+        let arrival = self.next_seq;
+        self.push_entry(Entry { text: line, arrival, at: Local::now() });
+    }
+
+    pub fn push_entry(&mut self, entry: Entry) {
         if self.lines.len() == self.capacity {
             self.lines.pop_front();
             // Already the oldest seq once the new line is in.
@@ -50,7 +66,7 @@ impl Buffer {
                 self.clears.pop_front();
             }
         }
-        self.lines.push_back(line);
+        self.lines.push_back(entry);
         self.next_seq += 1;
     }
 
@@ -69,8 +85,17 @@ impl Buffer {
     }
 
     pub fn get(&self, seq: Seq) -> Option<&str> {
+        self.entry(seq).map(|e| e.text.as_str())
+    }
+
+    pub fn entry(&self, seq: Seq) -> Option<&Entry> {
         let idx = seq.checked_sub(self.first_seq())?;
-        self.lines.get(usize::try_from(idx).ok()?).map(String::as_str)
+        self.lines.get(usize::try_from(idx).ok()?)
+    }
+
+    /// Retained lines with their sequence numbers, oldest first.
+    pub fn entries(&self) -> impl Iterator<Item = (Seq, &Entry)> {
+        (self.first_seq()..).zip(self.lines.iter())
     }
 
     /// Hides everything received so far from the pane view.

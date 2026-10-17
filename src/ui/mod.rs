@@ -34,6 +34,9 @@ const WARN: Color = Color::Indexed(221); // #ffd75f
 const BAD: Color = Color::Indexed(203); // #ff5f5f
 const MUTED: Color = Color::Indexed(247); // #9e9e9e
 const CURSOR_BG: Color = Color::Indexed(238); // #444444, scrollback cursor line
+const BLACK: Color = Color::Indexed(16); // #000000
+/// Search and highlight matches.
+const HIGHLIGHT: Style = Style::new().fg(BLACK).bg(Color::Indexed(221));
 
 fn split_screen(area: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area)
@@ -51,19 +54,41 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let json = app.scheme("json");
     match &mut app.mode {
-        Mode::Scrollback(sb) => scrollback::render(frame, main, sb, &app.panes[sb.pane], app.strip_ansi, app.wrap),
-        Mode::Detail(d) => detail::render(frame, main, d, &app.panes[d.back.pane], app.strip_ansi, json.as_deref()),
+        Mode::Scrollback(sb) => {
+            let opts = scrollback::ScrollbackOptions { strip: app.strip_ansi, wrap: app.wrap, times: app.times };
+            scrollback::render(frame, main, sb, &app.panes, &opts)
+        }
+        Mode::Detail(d) => detail::render(frame, main, d, &app.panes[d.pane], app.strip_ansi, json.as_deref()),
         Mode::Panes | Mode::Select { .. } => {
+            let opts = pane::PaneOptions { strip: app.strip_ansi, wrap: app.wrap, highlight: app.highlight.as_ref() };
             let areas = Stacked.areas(main, app.panes.len());
             for (i, (pane, area)) in app.panes.iter().zip(areas).enumerate() {
-                pane::render(frame, area, i, pane, app.strip_ansi, app.wrap);
+                pane::render(frame, area, i, pane, &opts);
             }
         }
     }
     if let Mode::Select { purpose, selected } = app.mode {
         popup::render(frame, main, purpose, selected, &app.panes);
     }
-    render_keys(frame, status_bar, app);
+    match &app.prompt {
+        Some(prompt) => render_prompt(frame, status_bar, prompt),
+        None => render_keys(frame, status_bar, app),
+    }
+}
+
+/// The text input, in place of the key bar.
+fn render_prompt(frame: &mut Frame, area: Rect, prompt: &crate::app::Prompt) {
+    let mut spans = vec![Span::styled(prompt.label(), Style::new().fg(ACCENT).bold())];
+    let before: String = prompt.input.chars().take(prompt.cursor).collect();
+    let mut after = prompt.input.chars().skip(prompt.cursor);
+    let at = after.next().map_or(" ".to_string(), |c| c.to_string());
+    spans.push(Span::styled(before, Style::new().fg(WHITE)));
+    spans.push(Span::styled(at, Style::new().fg(BLACK).bg(WHITE)));
+    spans.push(Span::styled(after.collect::<String>(), Style::new().fg(WHITE)));
+    if let Some(error) = &prompt.error {
+        spans.push(Span::styled(format!("   {error}"), Style::new().fg(BAD).bold()));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(BAR_BG)), area);
 }
 
 /// A raw line without its ANSI styling, for copying or parsing.
@@ -105,6 +130,11 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
         Span::styled(status, Style::new().fg(color)),
         Span::styled(paused, Style::new().fg(WARN).bold()),
     ]);
+    render_bar(frame, area, left, right);
+}
+
+/// A title bar: `left`, then the first of `right` that fits on the right.
+fn render_bar(frame: &mut Frame, area: Rect, left: Line, right: &[String]) {
     let style = Style::new().fg(BAR_FG).bg(BAR_BG);
     let left_width = left.width() as u16;
     frame.render_widget(Paragraph::new(left).style(style), area);
@@ -155,7 +185,9 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
     let keys: &[(&str, &str)] = match &app.mode {
         Mode::Panes => &[
             ("q", "Quit"),
-            ("b", "Scrollback"),
+            ("b B", "History"),
+            ("/", "Highlight"),
+            ("E e", "Filter"),
             ("N n", "Clear"),
             ("P p", "Pause"),
             ("C c", "Colors"),
@@ -163,23 +195,30 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
         ],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],
         Mode::Scrollback(_) if !app.wrap => &[
-            ("↑↓ jk", "Line"),
-            ("←→ hl", "Scroll"),
+            ("q", "Back"),
+            ("↑↓", "Line"),
+            ("←→", "Scroll"),
+            ("/ ?", "Search"),
+            ("n N", "Next"),
+            ("&", "Filter"),
             ("Enter", "Detail"),
             ("y", "Copy"),
+            ("t", "Time"),
             ("w", "Wrap"),
-            ("q", "Back"),
         ],
         Mode::Scrollback(_) => &[
-            ("↑↓ jk", "Line"),
-            ("PgUp PgDn", "Page"),
+            ("q", "Back"),
+            ("↑↓", "Line"),
             ("g G", "Top/End"),
+            ("/ ?", "Search"),
+            ("n N", "Next"),
+            ("&", "Filter"),
             ("Enter", "Detail"),
             ("y", "Copy"),
+            ("t", "Time"),
             ("w", "Wrap"),
-            ("q", "Back"),
         ],
-        Mode::Detail(_) => &[("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy"), ("q", "Back")],
+        Mode::Detail(_) => &[("q", "Back"), ("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy")],
     };
     let mut spans: Vec<Span> = keys
         .iter()

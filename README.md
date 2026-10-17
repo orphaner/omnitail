@@ -55,10 +55,15 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 | `N` | clear all panes (the history is kept) |
 | `n` | choose one pane to clear |
 | `b` | choose a pane and browse its whole history, including what was cleared |
+| `B` | browse all panes' histories merged, in arrival order |
+| `/` | highlight a pattern in all panes, live (empty to remove) |
+| `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove) |
 | `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
 | `C` / `c` | mtr's coloring on/off for all panes / one pane |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
 
-In the history view (`b`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`). `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").
+Patterns are regular expressions with smart case: case-insensitive unless they contain an uppercase letter. The prompt keeps a history (`↑`/`↓`).
+
+In the history views (`b`, `B`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. As in `less`, `/` and `?` search down and up (wrapping around), `n`/`N` go to the next match in the same/other direction, and `&pattern` shows only matching lines (`&!pattern` hides them). A pane's history starts with that pane's filter. `t` shows when each line arrived. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`). `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").

@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use super::text::Render;
 use crate::app::Pane;
 use crate::buffer::{Buffer, Seq};
+use crate::pattern::Pattern;
 
 fn split(area: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area)
@@ -16,30 +17,60 @@ pub fn body(area: Rect) -> Rect {
     split(area)[1]
 }
 
-pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, strip: bool, wrap: bool) {
+pub struct PaneOptions<'a> {
+    pub strip: bool,
+    pub wrap: bool,
+    pub highlight: Option<&'a Pattern>,
+}
+
+pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, opts: &PaneOptions) {
     let [title, body] = split(area);
     let hidden = pane.buffer.view_start() - pane.buffer.first_seq();
     let mut count = super::lines_count(pane.buffer.len());
     if hidden > 0 {
         count.push_str(&format!(" ({hidden} hidden)"));
     }
-    let full = format!("{}{count}", super::color_label(pane));
-    super::render_title(frame, title, index, pane, &[full, count]);
-    let render = Render { width: body.width as usize, strip, scheme: pane.color.active(), wrap, hscroll: 0 };
+    let filter = pane.filter.as_ref().map(|f| format!("filter: {} · ", f.text)).unwrap_or_default();
+    let right = [
+        format!("{filter}{}{count}", super::color_label(pane)),
+        format!("{filter}{count}"),
+        count,
+    ];
+    super::render_title(frame, title, index, pane, &right);
+    let render = Render {
+        width: body.width as usize,
+        strip: opts.strip,
+        scheme: pane.color.active(),
+        wrap: opts.wrap,
+        hscroll: 0,
+        highlight: opts.highlight,
+    };
     let start = pane.buffer.view_start();
-    let rows = tail_rows(&pane.buffer, start, pane.view_end().max(start), body.height as usize, &render);
+    let end = pane.view_end().max(start);
+    let rows = tail_rows(&pane.buffer, start, end, body.height as usize, &render, pane.filter.as_ref());
     frame.render_widget(Paragraph::new(rows), body);
 }
 
-/// The last `height` rows of lines `start..end`, bottom-anchored like a
-/// terminal: the newest line is always on the last row.
-fn tail_rows(buffer: &Buffer, start: Seq, end: Seq, height: usize, render: &Render) -> Vec<Line<'static>> {
+/// The last `height` rows of lines `start..end` that pass `filter`,
+/// bottom-anchored like a terminal: the newest line is on the last row.
+fn tail_rows(
+    buffer: &Buffer,
+    start: Seq,
+    end: Seq,
+    height: usize,
+    render: &Render,
+    filter: Option<&Pattern>,
+) -> Vec<Line<'static>> {
     let mut chunks = Vec::new();
     let mut count = 0;
     let mut seq = end;
     while seq > start && count < height {
         seq -= 1;
-        let rows = render.rows(buffer.get(seq).unwrap_or_default());
+        let line = buffer.get(seq).unwrap_or_default();
+        if filter.is_some_and(|f| !f.accepts(line)) {
+            continue;
+        }
+        let rows = render.rows(line);
         count += rows.len();
         chunks.push(rows);
     }
@@ -62,9 +93,11 @@ mod tests {
         for l in ["one", "abcdef", "z"] {
             b.push(l.into());
         }
-        let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0 };
-        assert_eq!(plain(tail_rows(&b, 0, 3, 2, &render)), ["def", "z"]);
-        assert_eq!(plain(tail_rows(&b, 2, 3, 5, &render)), ["z"], "lines before start (cleared) are hidden");
-        assert_eq!(plain(tail_rows(&b, 0, 2, 5, &render)), ["one", "abc", "def"], "lines from end on (paused) too");
+        let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None };
+        assert_eq!(plain(tail_rows(&b, 0, 3, 2, &render, None)), ["def", "z"]);
+        assert_eq!(plain(tail_rows(&b, 2, 3, 5, &render, None)), ["z"], "lines before start (cleared) are hidden");
+        assert_eq!(plain(tail_rows(&b, 0, 2, 5, &render, None)), ["one", "abc", "def"], "lines from end on (paused) too");
+        let not_z = Pattern::parse("!z", true).unwrap();
+        assert_eq!(plain(tail_rows(&b, 0, 3, 5, &render, Some(&not_z))), ["one", "abc", "def"], "filtered out");
     }
 }

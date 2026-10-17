@@ -27,7 +27,8 @@ pub fn split_json(text: &str) -> Option<(&str, Value)> {
 
 pub fn render(frame: &mut Frame, area: Rect, d: &mut Detail, pane: &Pane, strip: bool, json: Option<&Scheme>) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
-    let render = Render { width: body.width as usize, strip, scheme: pane.color.active(), wrap: true, hscroll: 0 };
+    let render =
+        Render { width: body.width as usize, strip, scheme: pane.color.active(), wrap: true, hscroll: 0, highlight: None };
 
     let (rows, kind) = match pane.buffer.get(d.seq) {
         None => (vec![Line::styled("(this line is no longer in history)", super::dim())], ""),
@@ -50,7 +51,7 @@ pub fn render(frame: &mut Frame, area: Rect, d: &mut Detail, pane: &Pane, strip:
 
     let more = if d.max_scroll > 0 { format!(" · {}/{} rows", d.scroll + height.min(rows.len()), rows.len()) } else { String::new() };
     let right = [format!("line {}{kind}{more}", d.seq + 1), format!("line {}", d.seq + 1)];
-    super::render_title(frame, title, d.back.pane, pane, &right);
+    super::render_title(frame, title, d.pane, pane, &right);
     frame.render_widget(Paragraph::new(rows).scroll((d.scroll as u16, 0)), body);
 }
 

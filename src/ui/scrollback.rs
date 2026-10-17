@@ -1,107 +1,166 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Line;
+use ratatui::style::{Style, Stylize};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
+use unicode_width::UnicodeWidthStr;
 
 use super::text::Render;
 use crate::app::{Pane, Scrollback};
-use crate::buffer::{Buffer, Seq};
+use crate::view::{HistoryView, Pos};
 
-pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, pane: &Pane, strip: bool, wrap: bool) {
+pub struct ScrollbackOptions {
+    pub strip: bool,
+    pub wrap: bool,
+    /// Arrival time before each line.
+    pub times: bool,
+}
+
+pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane], opts: &ScrollbackOptions) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
-    let render = Render { width: body.width as usize, strip, scheme: pane.color.active(), wrap, hscroll: sb.hscroll };
-    let view = layout(&pane.buffer, sb.cursor, sb.top, body.height as usize, &render);
-    sb.top = view.top;
-    sb.page = body.height as usize;
+    let view = sb.view(panes);
+    let highlight = sb.search.as_ref().map(|s| &s.pattern);
+    let layout = Painter { view, panes, opts, highlight, width: body.width as usize, hscroll: sb.hscroll };
+    let shown = layout.layout(sb.cursor, sb.top, body.height as usize);
 
-    let buffer = &pane.buffer;
     let position = match sb.cursor {
         None => "end".to_string(),
+        Some(c) if view.is_merged() => format!("{}/{}", c + 1, view.end()),
         Some(c) => format!("line {}", c + 1),
     };
-    let lines = format!("lines {}-{}", buffer.first_seq() + 1, buffer.end_seq());
-    let right = [format!("scrollback · {lines} · {position}"), position.clone()];
-    super::render_title(frame, title, sb.pane, pane, &right);
-    frame.render_widget(Paragraph::new(view.rows), body);
+    let mut details = Vec::new();
+    if let Some(s) = &sb.search {
+        details.push(if s.total > 0 { format!("match {}/{}", s.rank, s.total) } else { format!("/{}", s.pattern.text) });
+    }
+    if let Some(f) = &sb.filter {
+        details.push(format!("filter: {}", f.text));
+    }
+    let details = details.iter().map(|d| format!("{d} · ")).collect::<String>();
+    let right = [format!("scrollback · {details}{position}"), format!("{details}{position}"), position.clone()];
+    match &sb.target {
+        crate::view::Target::Pane(p) => super::render_title(frame, title, *p, &panes[*p], &right),
+        crate::view::Target::Merged(_) => {
+            let left = Line::from(vec![
+                Span::styled(" B ", Style::new().fg(super::WHITE).bg(super::BADGE_BG).bold()),
+                Span::raw(format!(" all {} panes, in arrival order ", panes.len())).bold(),
+            ]);
+            super::render_bar(frame, title, left, &right);
+        }
+    }
+    sb.top = shown.top;
+    sb.page = body.height as usize;
+    frame.render_widget(Paragraph::new(shown.rows), body);
 }
 
-struct View {
+/// Badge colors of panes in the merged view (fixed palette, dark text).
+const PANE_COLORS: [u8; 8] = [75, 114, 221, 176, 80, 215, 203, 147];
+
+struct Shown {
     rows: Vec<Line<'static>>,
-    top: Seq,
+    top: Pos,
 }
 
-/// Rows at position `seq`: clear marks that sit just before line `seq`,
-/// then the line itself (positions go up to `end_seq`, which has no line).
-fn position_rows(buffer: &Buffer, seq: Seq, render: &Render, cursor: bool) -> Vec<Line<'static>> {
-    let mut rows: Vec<Line<'static>> = buffer
-        .clears()
-        .filter(|m| m.seq == seq)
-        .map(|m| Line::styled(format!("──── {} at {} ────", m.reason, m.at.format("%H:%M:%S")), super::dim()))
-        .collect();
-    if let Some(line) = buffer.get(seq) {
-        let lines = render.rows(line);
-        if cursor {
-            rows.extend(lines.into_iter().map(|l| {
-                let style = l.style.bg(super::CURSOR_BG);
-                l.style(style)
-            }));
-        } else {
-            rows.extend(lines);
+struct Painter<'a> {
+    view: HistoryView<'a>,
+    panes: &'a [Pane],
+    opts: &'a ScrollbackOptions,
+    highlight: Option<&'a crate::pattern::Pattern>,
+    width: usize,
+    hscroll: usize,
+}
+
+impl Painter<'_> {
+    /// Rows at `pos`: clear marks just before it, then its line if visible,
+    /// behind its prefix (arrival time, pane badge).
+    fn rows(&self, pos: Pos, cursor: Option<Pos>) -> Vec<Line<'static>> {
+        let mut rows: Vec<Line<'static>> = self
+            .view
+            .marks(pos)
+            .into_iter()
+            .map(|m| Line::styled(format!("──── {} at {} ────", m.reason, m.at.format("%H:%M:%S")), super::dim()))
+            .collect();
+        let Some(line) = self.view.visible(pos) else { return rows };
+
+        let mut prefix: Vec<Span<'static>> = Vec::new();
+        if self.opts.times {
+            prefix.push(Span::styled(format!("{} ", line.entry.at.format("%H:%M:%S%.3f")), super::dim()));
         }
-    }
-    rows
-}
-
-/// Rows of positions `..=bottom`, bottom-anchored, and the top position.
-fn bottom_anchored(buffer: &Buffer, bottom: Seq, cursor: Seq, height: usize, render: &Render) -> View {
-    let mut chunks = Vec::new();
-    let mut count = 0;
-    let mut seq = bottom + 1;
-    while seq > buffer.first_seq() && count < height {
-        seq -= 1;
-        let rows = position_rows(buffer, seq, render, seq == cursor);
-        count += rows.len();
-        chunks.push(rows);
-    }
-    let mut rows: Vec<_> = chunks.into_iter().rev().flatten().collect();
-    rows.drain(..rows.len().saturating_sub(height));
-    View { rows, top: seq }
-}
-
-/// Lays out the screen so that the cursor line is visible, moving as
-/// little as possible from the previous `top`. Without a cursor, follows
-/// the end of the history.
-fn layout(buffer: &Buffer, cursor: Option<Seq>, top: Seq, height: usize, render: &Render) -> View {
-    let (first, end) = (buffer.first_seq(), buffer.end_seq());
-    let last = end.saturating_sub(1).max(first);
-    let Some(cursor) = cursor.map(|c| c.clamp(first, last)) else {
-        // Following: bottom-anchored on the very end, marks after the last line included.
-        return bottom_anchored(buffer, end, last, height, render);
-    };
-    let top = top.clamp(first, last);
-    if cursor < top {
-        return top_anchored(buffer, cursor, cursor, height, render);
-    }
-    // Is the cursor line fully on screen when starting from `top`?
-    let mut used = 0;
-    for seq in top..=cursor {
-        used += position_rows(buffer, seq, render, false).len();
-        if used > height {
-            return bottom_anchored(buffer, cursor, cursor, height, render);
+        if self.view.is_merged() {
+            let bg = ratatui::style::Color::Indexed(PANE_COLORS[line.pane % PANE_COLORS.len()]);
+            prefix.push(Span::styled(format!("{:>2} ", line.pane + 1), Style::new().fg(super::BLACK).bg(bg)));
+            prefix.push(Span::raw(" "));
         }
+        let prefix_width: usize = prefix.iter().map(|s| s.content.width()).sum();
+        let pane = &self.panes[line.pane];
+        let render = Render {
+            width: self.width.saturating_sub(prefix_width).max(1),
+            strip: self.opts.strip,
+            scheme: pane.color.active(),
+            wrap: self.opts.wrap,
+            hscroll: self.hscroll,
+            highlight: self.highlight,
+        };
+        let is_cursor = Some(pos) == cursor;
+        for (i, row) in render.rows(&line.entry.text).into_iter().enumerate() {
+            // Continuation rows are indented under the text, not the prefix.
+            let lead = if i == 0 { prefix.clone() } else { vec![Span::raw(" ".repeat(prefix_width))] };
+            let mut spans = lead;
+            spans.extend(row.spans);
+            let style = if is_cursor { row.style.bg(super::CURSOR_BG) } else { row.style };
+            rows.push(Line::from(spans).style(style));
+        }
+        rows
     }
-    top_anchored(buffer, top, cursor, height, render)
-}
 
-fn top_anchored(buffer: &Buffer, top: Seq, cursor: Seq, height: usize, render: &Render) -> View {
-    let mut rows = Vec::new();
-    let mut seq = top;
-    while seq <= buffer.end_seq() && rows.len() < height {
-        rows.extend(position_rows(buffer, seq, render, seq == cursor));
-        seq += 1;
+    /// Lays out the screen so the cursor line is visible, moving as little as
+    /// possible from the previous `top`. Without a cursor, follows the end.
+    fn layout(&self, cursor: Option<Pos>, top: Pos, height: usize) -> Shown {
+        let selected = self.view.resolve(cursor);
+        let (first, end) = (self.view.first(), self.view.end());
+        let Some(c) = cursor.and(selected) else {
+            // Following: bottom-anchored on the very end, marks after the last line included.
+            return self.bottom_anchored(end, selected, height);
+        };
+        let top = top.clamp(first, end.saturating_sub(1).max(first));
+        if c < top {
+            return self.top_anchored(c, selected, height);
+        }
+        // Is the cursor line fully on screen when starting from `top`?
+        let mut used = 0;
+        for pos in top..=c {
+            used += self.rows(pos, None).len();
+            if used > height {
+                return self.bottom_anchored(c, selected, height);
+            }
+        }
+        self.top_anchored(top, selected, height)
     }
-    rows.truncate(height);
-    View { rows, top }
+
+    fn bottom_anchored(&self, bottom: Pos, cursor: Option<Pos>, height: usize) -> Shown {
+        let mut chunks = Vec::new();
+        let mut count = 0;
+        let mut pos = bottom + 1;
+        while pos > self.view.first() && count < height {
+            pos -= 1;
+            let rows = self.rows(pos, cursor);
+            count += rows.len();
+            chunks.push(rows);
+        }
+        let mut rows: Vec<_> = chunks.into_iter().rev().flatten().collect();
+        rows.drain(..rows.len().saturating_sub(height));
+        Shown { rows, top: pos }
+    }
+
+    fn top_anchored(&self, top: Pos, cursor: Option<Pos>, height: usize) -> Shown {
+        let mut rows = Vec::new();
+        let mut pos = top;
+        while pos <= self.view.end() && rows.len() < height {
+            rows.extend(self.rows(pos, cursor));
+            pos += 1;
+        }
+        rows.truncate(height);
+        Shown { rows, top }
+    }
 }
 
 #[cfg(test)]
@@ -109,73 +168,88 @@ mod tests {
     use chrono::Local;
 
     use super::*;
+    use crate::app::App;
+    use crate::pattern::Pattern;
+    use crate::source::SourceEvent;
+    use crate::view::{Merged, Target};
 
-    fn buffer(n: usize) -> Buffer {
-        let mut b = Buffer::new(100);
-        for i in 0..n {
-            b.push(format!("l{i}"));
+    fn app(lines: &[&str]) -> App {
+        let mut app = App::with_names(&["a"]);
+        for l in lines {
+            app.ingest(0, SourceEvent::Line(l.to_string()));
         }
-        b
+        app
     }
 
-    fn render() -> Render<'static> {
-        Render { width: 40, strip: false, scheme: None, wrap: true, hscroll: 0 }
+    fn numbered(n: usize) -> App {
+        app(&(0..n).map(|i| format!("l{i}")).collect::<Vec<_>>().iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    fn plain(view: &View) -> Vec<String> {
-        view.rows.iter().map(|l| l.to_string()).collect()
+    fn opts() -> ScrollbackOptions {
+        ScrollbackOptions { strip: false, wrap: true, times: false }
     }
 
-    fn highlighted(view: &View) -> Vec<String> {
-        view.rows.iter().filter(|l| l.style.bg == Some(super::super::CURSOR_BG)).map(|l| l.to_string()).collect()
+    fn shown(app: &App, target: &Target, filter: Option<&Pattern>, cursor: Option<Pos>, top: Pos, height: usize) -> (Vec<String>, Vec<String>, Pos) {
+        let opts = opts();
+        let layout = Painter {
+            view: HistoryView::new(&app.panes, target, filter),
+            panes: &app.panes,
+            opts: &opts,
+            highlight: None,
+            width: 40,
+            hscroll: 0,
+        };
+        let s = layout.layout(cursor, top, height);
+        let text = |l: &Line| l.to_string();
+        let cursor_rows = s.rows.iter().filter(|l| l.style.bg == Some(super::super::CURSOR_BG)).map(text).collect();
+        (s.rows.iter().map(text).collect(), cursor_rows, s.top)
     }
 
     #[test]
     fn follows_the_end_with_cursor_on_last_line() {
-        let v = layout(&buffer(10), None, 0, 3, &render());
-        assert_eq!(plain(&v), ["l7", "l8", "l9"]);
-        assert_eq!(highlighted(&v), ["l9"]);
-        assert_eq!(v.top, 7);
+        let app = numbered(10);
+        let (rows, cursor, top) = shown(&app, &Target::Pane(0), None, None, 0, 3);
+        assert_eq!((rows, cursor, top), (vec!["l7".into(), "l8".into(), "l9".into()], vec!["l9".into()], 7));
     }
 
     #[test]
     fn view_moves_only_to_keep_the_cursor_visible() {
-        let b = buffer(10);
-        // Cursor inside the previous screen: nothing moves.
-        let v = layout(&b, Some(5), 4, 3, &render());
-        assert_eq!((plain(&v), v.top), (vec!["l4".into(), "l5".into(), "l6".into()], 4));
-        // Above it: the cursor becomes the top line.
-        let v = layout(&b, Some(2), 4, 3, &render());
-        assert_eq!((plain(&v)[0].as_str(), v.top), ("l2", 2));
-        // Below it: the cursor becomes the bottom line.
-        let v = layout(&b, Some(8), 2, 3, &render());
-        assert_eq!(plain(&v), ["l6", "l7", "l8"]);
-        assert_eq!(highlighted(&v), ["l8"]);
+        let app = numbered(10);
+        let t = Target::Pane(0);
+        assert_eq!(shown(&app, &t, None, Some(5), 4, 3).0, ["l4", "l5", "l6"], "inside: nothing moves");
+        assert_eq!(shown(&app, &t, None, Some(2), 4, 3).2, 2, "above: cursor becomes the top");
+        let (rows, cursor, _) = shown(&app, &t, None, Some(8), 2, 3);
+        assert_eq!((rows, cursor), (vec!["l6".into(), "l7".into(), "l8".into()], vec!["l8".into()]), "below: bottom");
     }
 
     #[test]
-    fn cursor_is_clamped_to_history() {
-        let v = layout(&buffer(3), Some(99), 0, 5, &render());
-        assert_eq!(highlighted(&v), ["l2"]);
+    fn filter_hides_lines_and_cursor_snaps() {
+        let app = app(&["keep 1", "drop", "keep 2", "drop"]);
+        let filter = Pattern::parse("keep", false).unwrap();
+        let (rows, cursor, _) = shown(&app, &Target::Pane(0), Some(&filter), Some(3), 0, 5);
+        assert_eq!(rows, ["keep 1", "keep 2"]);
+        assert_eq!(cursor, ["keep 2"]);
     }
 
     #[test]
-    fn shows_clear_marks_inline() {
-        let mut b = buffer(2);
-        b.clear_view(Local::now(), "cleared");
-        b.push("after".into());
-        let rows = plain(&layout(&b, None, 0, 10, &render()));
+    fn clear_marks_inline_and_after_last_line() {
+        let mut app = numbered(2);
+        app.panes[0].buffer.clear_view(Local::now(), "cleared");
+        let (rows, ..) = shown(&app, &Target::Pane(0), None, None, 0, 10);
+        assert!(rows.last().unwrap().contains("cleared at"), "{rows:?}");
+        app.ingest(0, SourceEvent::Line("after".into()));
+        let (rows, ..) = shown(&app, &Target::Pane(0), None, None, 0, 10);
         assert_eq!(rows.len(), 4);
-        assert_eq!(rows[1], "l1");
         assert!(rows[2].contains("cleared at"));
-        assert_eq!(rows[3], "after");
     }
 
     #[test]
-    fn mark_after_last_line_is_visible() {
-        let mut b = buffer(2);
-        b.clear_view(Local::now(), "cleared");
-        let rows = plain(&layout(&b, None, 0, 10, &render()));
-        assert!(rows.last().unwrap().contains("cleared at"));
+    fn merged_rows_carry_a_pane_badge() {
+        let mut app = App::with_names(&["a", "b"]);
+        app.ingest(0, SourceEvent::Line("from a".into()));
+        app.ingest(1, SourceEvent::Line("from b".into()));
+        let target = Target::Merged(Merged::build(&app.panes));
+        let (rows, ..) = shown(&app, &target, None, None, 0, 5);
+        assert_eq!(rows, [" 1  from a", " 2  from b"]);
     }
 }

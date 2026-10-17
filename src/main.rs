@@ -3,9 +3,11 @@ mod buffer;
 mod cli;
 mod color;
 mod config;
+mod pattern;
 mod source;
 mod spec;
 mod ui;
+mod view;
 
 use std::fs::File;
 use std::sync::{Arc, Mutex};

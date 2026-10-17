@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
 use crate::color::Scheme;
+use crate::pattern::Pattern;
 
 /// How lines are turned into rows.
 #[derive(Clone, Copy)]
@@ -19,6 +20,8 @@ pub struct Render<'a> {
     pub wrap: bool,
     /// Columns skipped on the left when not wrapping.
     pub hscroll: usize,
+    /// Matches stand out, over any other styling.
+    pub highlight: Option<&'a Pattern>,
 }
 
 impl Render<'_> {
@@ -28,6 +31,10 @@ impl Render<'_> {
     pub fn rows(&self, raw: &str) -> Vec<Line<'static>> {
         let mut out = Vec::new();
         for line in self.styled(raw) {
+            let line = match self.highlight {
+                Some(pattern) => highlight(line, pattern),
+                None => line,
+            };
             if self.wrap {
                 out.extend(wrap(line, self.width));
             } else {
@@ -57,6 +64,25 @@ impl Render<'_> {
             (true, Some(scheme)) => lines.into_iter().map(|l| scheme.line(&unstyled(l).to_string())).collect(),
         }
     }
+}
+
+/// Patches the style of the text `pattern` matches.
+fn highlight(line: Line<'static>, pattern: &Pattern) -> Line<'static> {
+    let text = line.to_string();
+    let ranges = pattern.find_ranges(&text);
+    if ranges.is_empty() {
+        return line;
+    }
+    let mut cells = Vec::with_capacity(text.len());
+    let mut offset = 0;
+    for span in &line.spans {
+        for c in span.content.chars() {
+            let hit = ranges.iter().any(|r| r.contains(&offset));
+            cells.push((c, if hit { span.style.patch(super::HIGHLIGHT) } else { span.style }));
+            offset += c.len_utf8();
+        }
+    }
+    line_of(&cells, line.style)
 }
 
 fn unstyled(line: Line<'static>) -> Line<'static> {
@@ -178,7 +204,7 @@ mod tests {
     }
 
     fn render(width: usize) -> Render<'static> {
-        Render { width, strip: false, scheme: None, wrap: true, hscroll: 0 }
+        Render { width, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None }
     }
 
     #[test]
@@ -237,6 +263,15 @@ mod tests {
         assert_eq!(error_fg(&colored.rows(source_colored)), Some(Color::Blue), "source colors win");
         let stripped = Render { strip: true, ..colored };
         assert_eq!(error_fg(&stripped.rows(source_colored)), Some(Color::Indexed(203)), "stripped, then mtr colors");
+    }
+
+    #[test]
+    fn highlights_matches_over_colors() {
+        let pattern = Pattern::parse("err", false).unwrap();
+        let r = Render { highlight: Some(&pattern), ..render(80) };
+        let rows = r.rows("\x1b[34mERROR\x1b[0m and err");
+        let hits: Vec<_> = rows[0].spans.iter().filter(|s| s.style.bg == super::super::HIGHLIGHT.bg).map(|s| s.content.to_string()).collect();
+        assert_eq!(hits, ["ERR", "err"]);
     }
 
     #[test]

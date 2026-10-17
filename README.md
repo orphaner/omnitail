@@ -18,8 +18,8 @@ Sources:
 |---|---|
 | `path` or `file:path` | a file, like `tail -F` (survives truncation, rotation, the file not existing yet) |
 | `cmd:'command'` | stdout and stderr of a shell command |
-| `docker:container` | `docker logs --follow` of a container |
-| `compose:` / `compose:web,db` | a compose project, one pane per service |
+| `docker:container` or `d:container` | `docker logs --follow` of a container |
+| `compose:` / `compose:web,db` (or `dc:…`) | a compose project, one pane per service |
 | `k8s:deploy/api [kubectl args]` | `kubectl logs --follow`; a label selector (`k8s:app=api`) merges its pods |
 | `journal:` / `journal:nginx` | the systemd journal, or one unit |
 | `-` | mtr's stdin (`make 2>&1 \| mtr - app.log`) |

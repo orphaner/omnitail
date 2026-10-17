@@ -9,7 +9,7 @@ use crate::spec::SourceSpec;
 #[command(version, about)]
 pub struct Cli {
     /// Sources to follow: `<path>`, `file:<path>`, `cmd:<command>`,
-    /// `docker:<container>`, `compose:[svc,…]`, `k8s:<target> [kubectl args]`,
+    /// `docker:<container>` (or `d:`), `compose:[svc,…]` (or `dc:`), `k8s:<target> [kubectl args]`,
     /// `journal:[unit]`, `-` (stdin).
     #[arg(required_unless_present = "config", value_name = "SOURCE")]
     pub sources: Vec<SourceSpec>,

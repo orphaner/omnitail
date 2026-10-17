@@ -59,8 +59,8 @@ impl FromStr for SourceSpec {
         match prefix {
             "file" => non_empty(rest).map(|p| SourceSpec::File { path: p.into() }),
             "cmd" => non_empty(rest).map(|c| SourceSpec::Cmd { command: c.into() }),
-            "docker" => non_empty(rest).map(|c| SourceSpec::Docker { container: c.into() }),
-            "compose" => Ok(SourceSpec::Compose {
+            "docker" | "d" => non_empty(rest).map(|c| SourceSpec::Docker { container: c.into() }),
+            "compose" | "dc" => Ok(SourceSpec::Compose {
                 services: rest.split(',').map(str::trim).filter(|s| !s.is_empty()).map(Into::into).collect(),
                 file: None,
             }),
@@ -79,7 +79,7 @@ impl FromStr for SourceSpec {
             "journal" => Ok(SourceSpec::Journal { unit: Some(rest.trim()).filter(|u| !u.is_empty()).map(Into::into) }),
             // Something like `dokcer:x` is far more likely a typo than a file name.
             p if !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase()) => Err(format!(
-                "unknown source type `{p}` (expected file, cmd, docker, compose, k8s or journal; \
+                "unknown source type `{p}` (expected file, cmd, docker/d, compose/dc, k8s or journal; \
                  use `file:{s}` for a path containing a colon)"
             )),
             _ => Ok(SourceSpec::File { path: s.into() }),
@@ -179,6 +179,13 @@ mod tests {
             parse("compose:web, db"),
             Ok(SourceSpec::Compose { services: vec!["web".into(), "db".into()], file: None })
         );
+    }
+
+    #[test]
+    fn short_prefixes() {
+        assert_eq!(parse("d:nginx"), parse("docker:nginx"));
+        assert_eq!(parse("dc:web,db"), parse("compose:web,db"));
+        assert_eq!(parse("dc:"), parse("compose:"));
     }
 
     #[test]

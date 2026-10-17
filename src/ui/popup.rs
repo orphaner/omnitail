@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, BorderType, Clear, List, ListState};
 
-use super::ACCENT;
+use super::{ACCENT, BADGE_BG, BAR_FG, POPUP_BG, WHITE};
 use crate::app::{Pane, SelectPurpose};
 
 pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: usize, panes: &[Pane]) {
@@ -22,7 +22,8 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
 
     let list = List::new(items)
         .block(Block::bordered().border_type(BorderType::Rounded).title(title).border_style(Style::new().fg(ACCENT)))
-        .highlight_style(Style::new().reversed());
+        .style(Style::new().fg(BAR_FG).bg(POPUP_BG))
+        .highlight_style(Style::new().fg(WHITE).bg(BADGE_BG));
     frame.render_widget(Clear, popup);
     frame.render_stateful_widget(list, popup, &mut ListState::default().with_selected(Some(selected)));
 }

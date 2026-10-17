@@ -17,14 +17,20 @@ use crate::app::{App, Mode, Pane};
 use crate::source::SourceStatus;
 use layout::{PaneLayout, Stacked};
 
-const BAR_BG: Color = Color::Indexed(236);
-const BAR_FG: Color = Color::Indexed(250);
-const KEY_BG: Color = Color::Indexed(240);
-// Fixed 256-palette indices rather than named colors: terminal themes
-// remap the 16 named ones, which broke the badge contrast.
-const BADGE_FG: Color = Color::Indexed(231); // #ffffff
+// mtr's own chrome uses fixed 256-palette indices only, never the 16 named
+// colors: terminal themes remap those (white on light blue badges, …).
+// Log content keeps the terminal's default colors and its own ANSI styling.
+const BAR_BG: Color = Color::Indexed(236); // #303030
+const BAR_FG: Color = Color::Indexed(252); // #d0d0d0
+const KEY_BG: Color = Color::Indexed(240); // #585858
+const WHITE: Color = Color::Indexed(231); // #ffffff
 const BADGE_BG: Color = Color::Indexed(24); // #005f87, ~7:1 against white
 const ACCENT: Color = Color::Indexed(39); // #00afff, popup border
+const POPUP_BG: Color = Color::Indexed(235); // #262626
+const OK: Color = Color::Indexed(114); // #87d787
+const WARN: Color = Color::Indexed(221); // #ffd75f
+const BAD: Color = Color::Indexed(203); // #ff5f5f
+const MUTED: Color = Color::Indexed(247); // #9e9e9e
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, status_bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
@@ -47,18 +53,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// One-line header: index, name and status on the left, `right` on the right.
 fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right: String) {
     let (status, color) = match &pane.status {
-        None => ("starting".to_string(), Color::DarkGray),
-        Some(s @ SourceStatus::Running) => (s.to_string(), Color::Green),
-        Some(s @ SourceStatus::Waiting(_)) => (s.to_string(), Color::Yellow),
-        Some(s @ SourceStatus::Exited(Some(0))) => (s.to_string(), Color::DarkGray),
-        Some(s) => (s.to_string(), Color::Red),
+        None => ("starting".to_string(), MUTED),
+        Some(s @ SourceStatus::Running) => (s.to_string(), OK),
+        Some(s @ SourceStatus::Waiting(_)) => (s.to_string(), WARN),
+        Some(s @ SourceStatus::Exited(Some(0))) => (s.to_string(), MUTED),
+        Some(s) => (s.to_string(), BAD),
     };
     let badge = format!(" {} ", index + 1);
     let status = format!("● {status}");
     // The name gives way first, so the status always stays visible.
     let name_room = (area.width as usize).saturating_sub(badge.len() + status.chars().count() + 2);
     let left = Line::from(vec![
-        Span::styled(badge, Style::new().fg(BADGE_FG).bg(BADGE_BG).bold()),
+        Span::styled(badge, Style::new().fg(WHITE).bg(BADGE_BG).bold()),
         Span::raw(format!(" {} ", ellipsize(&pane.name, name_room))).bold(),
         Span::styled(status, Style::new().fg(color)),
     ]);
@@ -70,7 +76,7 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
     let free = area.width.saturating_sub(left_width + 1);
     if right.chars().count() as u16 <= free {
         let right_area = Rect { x: area.right() - free, width: free, ..area };
-        frame.render_widget(Paragraph::new(right).alignment(Alignment::Right), right_area);
+        frame.render_widget(Paragraph::new(right).style(style).alignment(Alignment::Right), right_area);
     }
 }
 
@@ -111,7 +117,7 @@ fn render_keys(frame: &mut Frame, area: Rect, mode: &Mode) {
         .iter()
         .flat_map(|(key, desc)| {
             [
-                Span::styled(format!(" {key} "), Style::new().fg(Color::White).bg(KEY_BG)),
+                Span::styled(format!(" {key} "), Style::new().fg(WHITE).bg(KEY_BG)),
                 Span::styled(format!(" {desc}  "), Style::new().fg(BAR_FG)),
             ]
         })
@@ -120,7 +126,7 @@ fn render_keys(frame: &mut Frame, area: Rect, mode: &Mode) {
 }
 
 fn dim() -> Style {
-    Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC)
+    Style::new().fg(MUTED).add_modifier(Modifier::ITALIC)
 }
 
 #[cfg(test)]

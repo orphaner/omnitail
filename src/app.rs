@@ -117,6 +117,8 @@ impl Scrollback {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Detail {
     pub back: Scrollback,
+    /// Position of the line in `back`'s view, for ←/→.
+    pub pos: Pos,
     pub pane: usize,
     pub seq: Seq,
     pub scroll: usize,
@@ -434,9 +436,9 @@ impl App {
                 self.prompt = Some(Prompt::new(PromptKind::ViewFilter, input));
             }
             KeyCode::Enter => {
-                if let Some((pane, seq)) = selected {
+                if let (Some((pane, seq)), Some(pos)) = (selected, current) {
                     let back = sb.clone();
-                    self.mode = Mode::Detail(Detail { back, pane, seq, scroll: 0, max_scroll: 0, page: 0 });
+                    self.mode = Mode::Detail(Detail { back, pos, pane, seq, scroll: 0, max_scroll: 0, page: 0 });
                     return;
                 }
             }
@@ -475,6 +477,19 @@ impl App {
             KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
                 self.mode = Mode::Scrollback(d.back);
                 return;
+            }
+            KeyCode::Left | KeyCode::Right => {
+                // Previous/next line of the history view we came from, with
+                // its filter, pause and (merged) order.
+                let forward = key.code == KeyCode::Right;
+                let view = d.back.view(&self.panes);
+                match view.next(d.pos, forward).and_then(|p| view.line(p).map(|l| (p, l.pane, l.seq))) {
+                    Some((pos, pane, seq)) => {
+                        (d.pos, d.pane, d.seq, d.scroll) = (pos, pane, seq, 0);
+                        d.back.cursor = Some(pos);
+                    }
+                    None => self.notice = Some(if forward { "last line" } else { "first line" }.into()),
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => d.scroll = d.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => d.scroll = (d.scroll + 1).min(d.max_scroll),
@@ -927,6 +942,33 @@ mod tests {
         assert!(matches!(&a.mode, Mode::Detail(d) if d.scroll == 1), "scroll clamped");
         press(&mut a, KeyCode::Esc);
         assert_eq!(cursor(&a), Some(3));
+    }
+
+    #[test]
+    fn detail_left_right_walk_the_history_view() {
+        let mut a = App::with_names(&["a", "b"]);
+        for (p, t) in [(0, "a0"), (1, "b0"), (0, "skip"), (1, "b1")] {
+            a.ingest(p, line(t));
+        }
+        press(&mut a, KeyCode::Char('B'));
+        press(&mut a, KeyCode::Char('&'));
+        type_text(&mut a, "!skip");
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Enter); // detail of the last line, b1
+        let shown = |a: &App| match &a.mode {
+            Mode::Detail(d) => a.panes[d.pane].buffer.get(d.seq).unwrap().to_string(),
+            m => panic!("{m:?}"),
+        };
+        assert_eq!(shown(&a), "b1");
+        press(&mut a, KeyCode::Left);
+        assert_eq!(shown(&a), "b0", "filtered line skipped");
+        press(&mut a, KeyCode::Left);
+        assert_eq!(shown(&a), "a0", "other pane, arrival order");
+        press(&mut a, KeyCode::Left);
+        assert_eq!(a.notice.as_deref(), Some("first line"));
+        press(&mut a, KeyCode::Right);
+        press(&mut a, KeyCode::Char('q'));
+        assert_eq!(cursor(&a), Some(1), "back on the last line shown");
     }
 
     #[test]

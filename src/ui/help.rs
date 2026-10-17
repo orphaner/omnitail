@@ -54,6 +54,7 @@ pub const HISTORY: Section = Section {
 pub const DETAIL: Section = Section {
     title: "Line detail",
     keys: &[
+        ("← →", "previous / next line"),
         ("↑ ↓  j k", "scroll"),
         ("PgUp PgDn", "move a page"),
         ("g G", "top / bottom"),

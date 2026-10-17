@@ -228,7 +228,14 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("t", "Time"),
             ("w", "Wrap"),
         ],
-        Mode::Detail(_) => &[("q", "Back"), ("h", "Help"), ("↑↓ jk", "Scroll"), ("PgUp PgDn", "Page"), ("y", "Copy")],
+        Mode::Detail(_) => &[
+            ("q", "Back"),
+            ("h", "Help"),
+            ("←→", "Prev/next line"),
+            ("↑↓ jk", "Scroll"),
+            ("PgUp PgDn", "Page"),
+            ("y", "Copy"),
+        ],
     };
     let mut spans: Vec<Span> = keys
         .iter()

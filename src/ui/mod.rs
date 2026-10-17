@@ -20,7 +20,11 @@ use layout::{PaneLayout, Stacked};
 const BAR_BG: Color = Color::Indexed(236);
 const BAR_FG: Color = Color::Indexed(250);
 const KEY_BG: Color = Color::Indexed(240);
-const ACCENT: Color = Color::Blue;
+// Fixed 256-palette indices rather than named colors: terminal themes
+// remap the 16 named ones, which broke the badge contrast.
+const BADGE_FG: Color = Color::Indexed(231); // #ffffff
+const BADGE_BG: Color = Color::Indexed(24); // #005f87, ~7:1 against white
+const ACCENT: Color = Color::Indexed(39); // #00afff, popup border
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, status_bar] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
@@ -54,7 +58,7 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
     // The name gives way first, so the status always stays visible.
     let name_room = (area.width as usize).saturating_sub(badge.len() + status.chars().count() + 2);
     let left = Line::from(vec![
-        Span::styled(badge, Style::new().fg(Color::Black).bg(ACCENT).bold()),
+        Span::styled(badge, Style::new().fg(BADGE_FG).bg(BADGE_BG).bold()),
         Span::raw(format!(" {} ", ellipsize(&pane.name, name_room))).bold(),
         Span::styled(status, Style::new().fg(color)),
     ]);

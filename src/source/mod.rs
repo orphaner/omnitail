@@ -21,6 +21,9 @@ pub type SourceId = usize;
 pub enum SourceEvent {
     /// One line of output, without its trailing newline.
     Line(String),
+    /// What came before is obsolete (file truncated or rewritten): the pane
+    /// starts over, the scrollback keeps it behind a separator.
+    Reset(&'static str),
     Status(SourceStatus),
 }
 

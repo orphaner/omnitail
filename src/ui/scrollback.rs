@@ -41,7 +41,7 @@ fn position_rows(buffer: &Buffer, seq: Seq, width: usize, strip: bool) -> Vec<Li
     let mut rows: Vec<Line<'static>> = buffer
         .clears()
         .filter(|m| m.seq == seq)
-        .map(|m| Line::styled(format!("──── cleared at {} ────", m.at.format("%H:%M:%S")), super::dim()))
+        .map(|m| Line::styled(format!("──── {} at {} ────", m.reason, m.at.format("%H:%M:%S")), super::dim()))
         .collect();
     if let Some(line) = buffer.get(seq) {
         rows.extend(text::rows(line, width, strip));
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn shows_clear_marks_inline() {
         let mut b = buffer(2);
-        b.clear_view(Local::now());
+        b.clear_view(Local::now(), "cleared");
         b.push("after".into());
         let rows = plain(&layout(&b, None, 40, 10, false));
         assert_eq!(rows.len(), 4);
@@ -135,7 +135,7 @@ mod tests {
     #[test]
     fn mark_after_last_line_is_visible() {
         let mut b = buffer(2);
-        b.clear_view(Local::now());
+        b.clear_view(Local::now(), "cleared");
         let rows = plain(&layout(&b, None, 40, 10, false));
         assert!(rows.last().unwrap().contains("cleared at"));
     }

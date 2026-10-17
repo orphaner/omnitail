@@ -9,8 +9,8 @@ use tokio::task::JoinHandle;
 
 use super::{Emitter, Source, SourceEvent, SourceStatus, decode_line};
 
-/// Follows a file like `tail -F`: survives truncation, rotation and the file
-/// not existing yet.
+/// Follows a file like `tail -F`: survives truncation, rotation, in-place
+/// rewrites (editors) and the file not existing yet.
 pub struct FileSource {
     follower: FileFollower,
 }
@@ -69,9 +69,11 @@ fn watch_dir(path: &Path) -> &Path {
 /// looks at the file and returns whatever happened since the last one.
 pub struct FileFollower {
     path: PathBuf,
-    /// Lines of existing content shown on the very first open; files that
-    /// appear later (rotation, creation) are read from the start.
-    initial_lines: Option<usize>,
+    /// Lines of existing content shown when opening with `tail_on_open`.
+    initial_lines: usize,
+    /// True for the first open and after a rewrite: show the last lines.
+    /// Files that appear later (rotation, creation) are read from the start.
+    tail_on_open: bool,
     current: Option<OpenFile>,
     last_status: Option<SourceStatus>,
 }
@@ -82,11 +84,16 @@ struct OpenFile {
     pos: u64,
     /// Bytes after the last newline, held until the line is complete.
     partial: Vec<u8>,
+    /// The last bytes before `pos`, to notice the file being rewritten in
+    /// place with different content (its size alone does not tell).
+    recent: Vec<u8>,
 }
+
+const RECENT_LEN: usize = 256;
 
 impl FileFollower {
     pub fn new(path: PathBuf, initial_lines: usize) -> Self {
-        Self { path, initial_lines: Some(initial_lines), current: None, last_status: None }
+        Self { path, initial_lines, tail_on_open: true, current: None, last_status: None }
     }
 
     pub fn poll(&mut self) -> Vec<SourceEvent> {
@@ -96,11 +103,21 @@ impl FileFollower {
         if let Some(cur) = &mut self.current {
             let same_file = meta.as_ref().is_some_and(|m| file_id(m) == cur.id);
             if same_file {
-                if meta.as_ref().is_some_and(|m| m.len() < cur.pos) {
+                let len = meta.as_ref().map_or(0, Metadata::len);
+                if len < cur.pos {
                     tracing::info!(path = %self.path.display(), "truncated");
                     cur.reset();
+                    out.push(SourceEvent::Reset("truncated"));
+                } else if cur.rewritten().unwrap_or(true) {
+                    // New content, not a continuation: reopen as if new.
+                    tracing::info!(path = %self.path.display(), "rewritten in place");
+                    out.push(SourceEvent::Reset("rewritten"));
+                    self.current = None;
+                    self.tail_on_open = true;
                 }
-                if let Err(e) = cur.read_new(&mut out) {
+                if let Some(cur) = &mut self.current
+                    && let Err(e) = cur.read_new(&mut out)
+                {
                     self.fail(e, &mut out);
                 }
             } else {
@@ -135,13 +152,11 @@ impl FileFollower {
     fn open(&mut self) -> io::Result<OpenFile> {
         let mut file = File::open(&self.path)?;
         let meta = file.metadata()?;
-        let pos = match self.initial_lines {
-            Some(n) => tail_offset(&mut file, meta.len(), n)?,
-            None => 0,
-        };
+        let pos = if self.tail_on_open { tail_offset(&mut file, meta.len(), self.initial_lines)? } else { 0 };
+        let recent = read_at(&mut file, pos.saturating_sub(RECENT_LEN as u64), pos)?;
         file.seek(SeekFrom::Start(pos))?;
-        self.initial_lines = None;
-        Ok(OpenFile { file, id: file_id(&meta), pos, partial: Vec::new() })
+        self.tail_on_open = false;
+        Ok(OpenFile { file, id: file_id(&meta), pos, partial: Vec::new(), recent })
     }
 
     fn fail(&mut self, e: io::Error, out: &mut Vec<SourceEvent>) {
@@ -166,6 +181,7 @@ impl OpenFile {
                 return Ok(());
             }
             self.pos += n as u64;
+            self.remember(&chunk[..n]);
             let mut rest = &chunk[..n];
             while let Some(i) = rest.iter().position(|&b| b == b'\n') {
                 self.partial.extend_from_slice(&rest[..i]);
@@ -184,12 +200,39 @@ impl OpenFile {
         }
     }
 
+    fn remember(&mut self, bytes: &[u8]) {
+        let bytes = &bytes[bytes.len().saturating_sub(RECENT_LEN)..];
+        let excess = (self.recent.len() + bytes.len()).saturating_sub(RECENT_LEN);
+        self.recent.drain(..excess);
+        self.recent.extend_from_slice(bytes);
+    }
+
+    /// Whether the bytes just before our position are no longer the ones
+    /// we read there.
+    fn rewritten(&mut self) -> io::Result<bool> {
+        if self.recent.is_empty() {
+            return Ok(false);
+        }
+        let now = read_at(&mut self.file, self.pos - self.recent.len() as u64, self.pos)?;
+        self.file.seek(SeekFrom::Start(self.pos))?;
+        Ok(now != self.recent)
+    }
+
     fn reset(&mut self) {
         // Seeking cannot fail on a regular file opened for reading.
         let _ = self.file.seek(SeekFrom::Start(0));
         self.pos = 0;
         self.partial.clear();
+        self.recent.clear();
     }
+}
+
+/// Reads `start..end`, or less if the file is now shorter. Moves the cursor.
+fn read_at(file: &mut File, start: u64, end: u64) -> io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::with_capacity((end - start) as usize);
+    file.take(end - start).read_to_end(&mut buf)?;
+    Ok(buf)
 }
 
 /// Identity of a file on disk, to tell "same file, grown" from "replaced".
@@ -252,7 +295,7 @@ mod tests {
             .into_iter()
             .filter_map(|e| match e {
                 SourceEvent::Line(l) => Some(l),
-                SourceEvent::Status(_) => None,
+                _ => None,
             })
             .collect()
     }
@@ -315,7 +358,37 @@ mod tests {
         let mut f = FileFollower::new(p.clone(), 10);
         f.poll();
         fs::write(&p, "new\n").unwrap();
-        assert_eq!(lines(f.poll()), ["new"]);
+        let events = f.poll();
+        assert_eq!(events[0], SourceEvent::Reset("truncated"));
+        assert_eq!(lines(events), ["new"]);
+    }
+
+    #[test]
+    fn in_place_rewrite_by_an_editor_is_detected() {
+        // Editors truncate and rewrite the same inode; by the time we look,
+        // the file can already be longer than our read position.
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("log");
+        fs::write(&p, "a\nyo\n\n").unwrap();
+        let mut f = FileFollower::new(p.clone(), 2);
+        assert_eq!(lines(f.poll()), ["yo", ""]);
+
+        fs::write(&p, "a\nyo\nde\nda\ndudu\n").unwrap();
+        let events = f.poll();
+        assert_eq!(events[0], SourceEvent::Reset("rewritten"));
+        assert_eq!(lines(events), ["da", "dudu"], "last lines of the new content, not a misaligned read");
+    }
+
+    #[test]
+    fn plain_append_is_not_a_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("log");
+        fs::write(&p, "a\nb\n").unwrap();
+        let mut f = FileFollower::new(p.clone(), 10);
+        f.poll();
+        // Same prefix written again (e.g. an editor that only appended).
+        fs::write(&p, "a\nb\nc\n").unwrap();
+        assert_eq!(f.poll(), [SourceEvent::Line("c".into())]);
     }
 
     #[test]

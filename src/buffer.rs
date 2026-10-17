@@ -25,6 +25,8 @@ pub struct ClearMark {
     /// First line that came after the clear.
     pub seq: Seq,
     pub at: DateTime<Local>,
+    /// Why: "cleared" by the user, or a source reset such as "truncated".
+    pub reason: &'static str,
 }
 
 impl Buffer {
@@ -72,12 +74,12 @@ impl Buffer {
     }
 
     /// Hides everything received so far from the pane view.
-    pub fn clear_view(&mut self, at: DateTime<Local>) {
+    pub fn clear_view(&mut self, at: DateTime<Local>, reason: &'static str) {
         let seq = self.next_seq;
         match self.clears.back_mut() {
-            // Nothing arrived since the last clear: just refresh its time.
-            Some(last) if last.seq == seq => last.at = at,
-            _ => self.clears.push_back(ClearMark { seq, at }),
+            // Nothing arrived since the last clear: just refresh it.
+            Some(last) if last.seq == seq => *last = ClearMark { seq, at, reason },
+            _ => self.clears.push_back(ClearMark { seq, at, reason }),
         }
     }
 
@@ -118,7 +120,7 @@ mod tests {
     fn clear_hides_from_view_but_keeps_history() {
         let mut b = buf(10, 3);
         assert_eq!(b.view_start(), 0);
-        b.clear_view(Local::now());
+        b.clear_view(Local::now(), "cleared");
         assert_eq!(b.view_start(), 3);
         b.push("after".into());
         assert_eq!(b.get(b.view_start()), Some("after"));
@@ -128,18 +130,18 @@ mod tests {
     #[test]
     fn repeated_clear_without_new_lines_is_one_mark() {
         let mut b = buf(10, 2);
-        b.clear_view(Local::now());
-        b.clear_view(Local::now());
+        b.clear_view(Local::now(), "cleared");
+        b.clear_view(Local::now(), "cleared");
         assert_eq!(b.clears().count(), 1);
         b.push("x".into());
-        b.clear_view(Local::now());
+        b.clear_view(Local::now(), "cleared");
         assert_eq!(b.clears().count(), 2);
     }
 
     #[test]
     fn marks_older_than_history_are_dropped() {
         let mut b = buf(2, 1);
-        b.clear_view(Local::now()); // mark at seq 1
+        b.clear_view(Local::now(), "cleared"); // mark at seq 1
         b.push("a".into()); // seq 1, buffer [0, 1]
         b.push("b".into()); // seq 2, buffer [1, 2]: mark still before oldest line
         assert_eq!(b.clears().count(), 1);

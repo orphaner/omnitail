@@ -189,7 +189,7 @@ mod tests {
         press(&mut app, KeyCode::Char('N'));
         app.ingest(0, SourceEvent::Line("fresh".into()));
         let s = screen(&mut app);
-        assert!(s.contains("(20 cleared)") && s.contains("fresh") && !s.contains("a19"), "{s}");
+        assert!(s.contains("(20 hidden)") && s.contains("fresh") && !s.contains("a19"), "{s}");
 
         press(&mut app, KeyCode::Char('b'));
         let s = screen(&mut app);

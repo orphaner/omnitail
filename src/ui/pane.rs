@@ -12,7 +12,7 @@ pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, strip: b
     let hidden = pane.buffer.view_start() - pane.buffer.first_seq();
     let mut right = super::lines_count(pane.buffer.len());
     if hidden > 0 {
-        right.push_str(&format!(" ({hidden} cleared)"));
+        right.push_str(&format!(" ({hidden} hidden)"));
     }
     super::render_title(frame, title, index, pane, right);
     let rows = tail_rows(&pane.buffer, pane.buffer.view_start(), body.width, body.height, strip);

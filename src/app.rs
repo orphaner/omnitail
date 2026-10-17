@@ -64,6 +64,10 @@ impl App {
         let Some(pane) = self.panes.get_mut(id) else { return };
         match event {
             SourceEvent::Line(line) => pane.buffer.push(line),
+            SourceEvent::Reset(reason) => {
+                tracing::info!(source = %pane.name, reason, "reset");
+                pane.buffer.clear_view(Local::now(), reason);
+            }
             SourceEvent::Status(status) => {
                 tracing::info!(source = %pane.name, %status);
                 pane.status = Some(status);
@@ -84,7 +88,7 @@ impl App {
                 KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
                 KeyCode::Char('N') => {
                     let now = Local::now();
-                    self.panes.iter_mut().for_each(|p| p.buffer.clear_view(now));
+                    self.panes.iter_mut().for_each(|p| p.buffer.clear_view(now, "cleared"));
                 }
                 KeyCode::Char('n') => self.select(SelectPurpose::Clear),
                 KeyCode::Char('b') => self.select(SelectPurpose::Scrollback),
@@ -142,7 +146,7 @@ impl App {
     fn apply(&mut self, purpose: SelectPurpose, pane: usize) {
         match purpose {
             SelectPurpose::Clear => {
-                self.panes[pane].buffer.clear_view(Local::now());
+                self.panes[pane].buffer.clear_view(Local::now(), "cleared");
                 self.mode = Mode::Panes;
             }
             SelectPurpose::Scrollback => {

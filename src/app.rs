@@ -128,6 +128,8 @@ pub struct Detail {
 /// The key reference screen (`h`), over whatever view is open.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Help {
+    /// Every view's keys, not just the current one's (`Tab`).
+    pub all: bool,
     pub scroll: usize,
     /// Written by the renderer.
     pub max_scroll: usize,
@@ -492,6 +494,10 @@ impl App {
     fn help_key(&mut self, mut help: Help, key: KeyEvent) {
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('h') | KeyCode::F(1) => return,
+            KeyCode::Tab => {
+                help.all = !help.all;
+                help.scroll = 0;
+            }
             KeyCode::Up | KeyCode::Char('k') => help.scroll = help.scroll.saturating_sub(1),
             KeyCode::Down | KeyCode::Char('j') => help.scroll = (help.scroll + 1).min(help.max_scroll),
             KeyCode::Home | KeyCode::Char('g') => help.scroll = 0,

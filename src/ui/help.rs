@@ -1,5 +1,5 @@
-//! Full-screen key reference (`h`): sections flowed into as many columns
-//! as the screen allows, the current view's section first.
+//! Full-screen key reference (`h`): the keys of the current view (`Tab`
+//! for all of them), flowed into as many columns as the screen allows.
 
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
@@ -63,8 +63,8 @@ pub const DETAIL: Section = Section {
 };
 
 pub const PICKER: Section = Section {
-    title: "Pane picker",
-    keys: &[("1-9", "pick a pane"), ("↑ ↓ Enter", "choose"), ("Esc", "cancel")],
+    title: "Choosing a pane (popup of b n e p c)",
+    keys: &[("1-9", "that pane"), ("↑ ↓ Enter", "move, then choose"), ("Esc", "cancel")],
 };
 
 pub const PROMPT: Section = Section {
@@ -89,18 +89,32 @@ pub const PATTERNS: Section = Section {
     ],
 };
 
-/// Sections in display order: the one for `mode` first.
-pub fn sections(mode: &Mode) -> Vec<&'static Section> {
-    let current = match mode {
-        Mode::Panes => &PANES,
-        Mode::Select { .. } => &PICKER,
-        Mode::Scrollback(_) => &HISTORY,
-        Mode::Detail(_) => &DETAIL,
+/// Sections to show, the current view's first: only what that view uses,
+/// or everything with `all`.
+pub fn sections(mode: &Mode, all: bool) -> Vec<&'static Section> {
+    let mut shown: Vec<&Section> = match mode {
+        Mode::Panes | Mode::Select { .. } => vec![&PANES, &PICKER, &PROMPT, &PATTERNS],
+        Mode::Scrollback(_) => vec![&HISTORY, &PROMPT, &PATTERNS],
+        Mode::Detail(_) => vec![&DETAIL],
     };
-    let mut all: Vec<&Section> = vec![&PANES, &HISTORY, &DETAIL, &PICKER, &PROMPT, &PATTERNS];
-    all.retain(|s| !std::ptr::eq(*s, current));
-    all.insert(0, current);
-    all
+    if all {
+        for section in [&PANES, &HISTORY, &DETAIL, &PICKER, &PROMPT, &PATTERNS] {
+            if !shown.iter().any(|s| std::ptr::eq(*s, section)) {
+                shown.push(section);
+            }
+        }
+    }
+    shown
+}
+
+/// Short name of the view, for the title.
+fn view_name(mode: &Mode) -> &'static str {
+    match mode {
+        Mode::Panes | Mode::Select { .. } => "panes",
+        Mode::Scrollback(sb) if matches!(sb.target, crate::view::Target::Merged(_)) => "merged history",
+        Mode::Scrollback(_) => "history",
+        Mode::Detail(_) => "line detail",
+    }
 }
 
 const GAP: usize = 4;
@@ -131,8 +145,8 @@ fn section_lines(section: &Section, current: bool, key_width: usize) -> Vec<Line
 
 /// Columns of lines, and their width: sections go, in order, to the
 /// shortest column.
-fn columns(mode: &Mode, width: usize) -> (Vec<Vec<Line<'static>>>, usize) {
-    let sections = sections(mode);
+fn columns(mode: &Mode, all: bool, width: usize) -> (Vec<Vec<Line<'static>>>, usize) {
+    let sections = sections(mode, all);
     let key_w = sections.iter().map(|s| key_width(s)).max().unwrap_or(0);
     let col_w = sections
         .iter()
@@ -157,12 +171,13 @@ pub fn render(frame: &mut Frame, area: Rect, help: &mut Help, mode: &Mode) {
             .areas(area);
     let left = Line::from(vec![
         Span::styled(" mtr ", Style::new().fg(super::WHITE).bg(super::BADGE_BG).bold()),
-        Span::raw(" keys ").bold(),
+        Span::raw(if help.all { " all keys ".to_string() } else { format!(" keys · {} ", view_name(mode)) }).bold(),
     ]);
-    super::render_bar(frame, title, left, &["Esc to close".into()]);
+    let switch = if help.all { "Tab: this view only" } else { "Tab: all keys" };
+    super::render_bar(frame, title, left, &[format!("{switch}  ·  Esc to close"), "Esc to close".into()]);
 
     let inner = Rect { x: body.x + 2, width: body.width.saturating_sub(4), ..body };
-    let (cols, col_w) = columns(mode, inner.width as usize);
+    let (cols, col_w) = columns(mode, help.all, inner.width as usize);
     let tallest = cols.iter().map(Vec::len).max().unwrap_or(0);
     help.max_scroll = tallest.saturating_sub(inner.height as usize);
     help.scroll = help.scroll.min(help.max_scroll);
@@ -188,13 +203,16 @@ mod tests {
     #[test]
     fn current_section_first_and_columns_follow_width() {
         let history = Mode::Scrollback(crate::app::Scrollback::for_test());
-        assert_eq!(sections(&history)[0].title, "History (b, B)");
-        assert_eq!(sections(&Mode::Panes)[0].title, "Panes");
-        assert_eq!(sections(&Mode::Panes).len(), 6);
+        let titles = |mode: &Mode, all| sections(mode, all).iter().map(|s| s.title).collect::<Vec<_>>();
+        assert_eq!(titles(&history, false), ["History (b, B)", "Typing a pattern", "Patterns"]);
+        assert_eq!(titles(&Mode::Panes, false)[0], "Panes");
+        assert!(!titles(&Mode::Panes, false).contains(&"History (b, B)"), "contextual");
+        assert_eq!(titles(&history, true).len(), 6);
+        assert_eq!(titles(&history, true)[0], "History (b, B)", "current view still first");
 
-        assert_eq!(columns(&Mode::Panes, 40).0.len(), 1);
-        assert!(columns(&Mode::Panes, 200).0.len() >= 3);
+        assert_eq!(columns(&Mode::Panes, true, 40).0.len(), 1);
+        assert!(columns(&Mode::Panes, true, 200).0.len() >= 3);
         let total = |(cols, _): (Vec<Vec<Line>>, usize)| cols.iter().map(Vec::len).sum::<usize>();
-        assert_eq!(total(columns(&Mode::Panes, 40)), total(columns(&Mode::Panes, 200)), "same content");
+        assert_eq!(total(columns(&Mode::Panes, true, 40)), total(columns(&Mode::Panes, true, 200)), "same content");
     }
 }

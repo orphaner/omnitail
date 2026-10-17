@@ -10,6 +10,7 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
     let title = match purpose {
         SelectPurpose::Scrollback => " Scrollback ",
         SelectPurpose::Clear => " Clear ",
+        SelectPurpose::Color => " Colors on/off ",
     };
     let max_name = (area.width as usize).saturating_sub(8);
     let items: Vec<String> = panes

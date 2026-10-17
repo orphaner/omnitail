@@ -126,11 +126,31 @@ pub struct SourceConfig {
     /// Start the source again when it ends. Default: on for containers,
     /// whose log streams end whenever the container restarts.
     pub restart: Option<bool>,
+    /// Color scheme(s), in priority order; `"none"` turns mtr's coloring
+    /// off. Default: guessed from the first lines.
+    pub scheme: Option<SchemeRef>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(untagged)]
+pub enum SchemeRef {
+    One(String),
+    Many(Vec<String>),
 }
 
 impl SourceConfig {
     pub fn title(&self) -> String {
         self.name.clone().unwrap_or_else(|| self.spec.to_string())
+    }
+
+    pub fn color_choice(&self) -> crate::color::Choice {
+        use crate::color::Choice;
+        match &self.scheme {
+            None => Choice::Auto,
+            Some(SchemeRef::One(name)) if name == "none" => Choice::Off,
+            Some(SchemeRef::One(name)) => Choice::Named(vec![name.clone()]),
+            Some(SchemeRef::Many(names)) => Choice::Named(names.clone()),
+        }
     }
 
     pub fn restart(&self) -> bool {
@@ -143,7 +163,7 @@ impl SourceConfig {
 
 impl From<SourceSpec> for SourceConfig {
     fn from(spec: SourceSpec) -> Self {
-        Self { spec, name: None, lines: None, restart: None }
+        Self { spec, name: None, lines: None, restart: None, scheme: None }
     }
 }
 

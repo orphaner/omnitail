@@ -4,16 +4,31 @@ use ansi_to_tui::IntoText;
 use ratatui::text::{Line, Span};
 use unicode_width::UnicodeWidthChar;
 
-/// Parses ANSI styling (or drops it with `strip`) and wraps to `width`
-/// columns. Always returns at least one row, so empty lines keep their place.
-pub fn rows(raw: &str, width: usize, strip: bool) -> Vec<Line<'static>> {
-    let lines = match raw.as_bytes().into_text() {
-        Ok(text) => text.lines,
-        Err(_) => vec![Line::raw(raw.to_owned())],
+use crate::color::Scheme;
+
+/// Styles a raw line and wraps it to `width` columns. Lines colored by
+/// their source keep those colors (unless `strip`); the others get mtr's
+/// `scheme`, if any. Always returns at least one row, so empty lines keep
+/// their place.
+pub fn rows(raw: &str, width: usize, strip: bool, scheme: Option<&Scheme>) -> Vec<Line<'static>> {
+    let lines = if raw.contains('\x1b') {
+        let lines = match raw.as_bytes().into_text() {
+            Ok(text) => text.lines,
+            Err(_) => vec![Line::raw(raw.to_owned())],
+        };
+        match (strip, scheme) {
+            (false, _) => lines,
+            (true, None) => lines.into_iter().map(unstyled).collect(),
+            (true, Some(scheme)) => lines.into_iter().map(|l| scheme.line(&unstyled(l).to_string())).collect(),
+        }
+    } else {
+        vec![match scheme {
+            Some(scheme) => scheme.line(raw),
+            None => Line::raw(raw.to_owned()),
+        }]
     };
     let mut out = Vec::new();
     for line in lines {
-        let line = if strip { unstyled(line) } else { line };
         out.extend(wrap(line, width));
     }
     if out.is_empty() {
@@ -74,36 +89,53 @@ mod tests {
 
     #[test]
     fn wraps_by_width() {
-        assert_eq!(plain(&rows("abcdefg", 3, false)), ["abc", "def", "g"]);
-        assert_eq!(plain(&rows("abc", 3, false)), ["abc"]);
-        assert_eq!(plain(&rows("", 3, false)), [""]);
+        assert_eq!(plain(&rows("abcdefg", 3, false, None)), ["abc", "def", "g"]);
+        assert_eq!(plain(&rows("abc", 3, false, None)), ["abc"]);
+        assert_eq!(plain(&rows("", 3, false, None)), [""]);
     }
 
     #[test]
     fn wide_chars_do_not_split() {
-        assert_eq!(plain(&rows("a日本", 4, false)), ["a日", "本"]);
+        assert_eq!(plain(&rows("a日本", 4, false, None)), ["a日", "本"]);
     }
 
     #[test]
     fn keeps_or_strips_ansi() {
         let raw = "\x1b[31mred\x1b[0m ok";
-        let styled = rows(raw, 80, false);
+        let styled = rows(raw, 80, false, None);
         assert_eq!(styled[0].to_string(), "red ok");
         assert_eq!(styled[0].spans[0].style, Style::default().fg(Color::Red));
-        let stripped = rows(raw, 80, true);
+        let stripped = rows(raw, 80, true, None);
         assert_eq!(stripped[0].to_string(), "red ok");
         assert!(stripped[0].spans.iter().all(|s| s.style == Style::default()));
     }
 
     #[test]
     fn style_survives_wrapping() {
-        let r = rows("\x1b[32mabcdef\x1b[0m", 4, false);
+        let r = rows("\x1b[32mabcdef\x1b[0m", 4, false, None);
         assert_eq!(plain(&r), ["abcd", "ef"]);
         assert_eq!(r[1].spans[0].style.fg, Some(Color::Green));
     }
 
     #[test]
+    fn scheme_applies_to_lines_without_source_colors() {
+        let lib = crate::color::Library::new(&Default::default()).unwrap();
+        let generic = lib.resolve(&["generic".into()]).unwrap();
+        let error_fg = |rows: &[Line]| rows[0].spans.iter().find(|s| s.content == "ERROR").and_then(|s| s.style.fg);
+
+        let plain = rows("ERROR boom", 80, false, Some(&generic));
+        assert_eq!(error_fg(&plain), Some(Color::Indexed(203)));
+
+        let source_colored = "\x1b[34mERROR\x1b[0m boom";
+        let kept = rows(source_colored, 80, false, Some(&generic));
+        assert_eq!(error_fg(&kept), Some(Color::Blue), "source colors win");
+
+        let stripped = rows(source_colored, 80, true, Some(&generic));
+        assert_eq!(error_fg(&stripped), Some(Color::Indexed(203)), "stripped, then mtr colors");
+    }
+
+    #[test]
     fn drops_control_chars() {
-        assert_eq!(plain(&rows("a\x07b\x08c", 80, false)), ["abc"]);
+        assert_eq!(plain(&rows("a\x07b\x08c", 80, false, None)), ["abc"]);
     }
 }

@@ -8,7 +8,10 @@ use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
+use std::sync::Arc;
+
 use crate::buffer::{Buffer, Seq};
+use crate::color::{Library, PaneColor};
 use crate::source::{SourceEvent, SourceId, SourceStatus};
 
 pub struct Pane {
@@ -17,6 +20,7 @@ pub struct Pane {
     pub status: Option<SourceStatus>,
     /// Times the source came back after ending.
     pub restarts: u32,
+    pub color: PaneColor,
     pub buffer: Buffer,
 }
 
@@ -24,6 +28,7 @@ pub struct Pane {
 pub enum SelectPurpose {
     Scrollback,
     Clear,
+    Color,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,21 +56,37 @@ pub struct App {
     pub mode: Mode,
     pub strip_ansi: bool,
     pub quit: bool,
+    library: Arc<Library>,
 }
 
 impl App {
-    pub fn new(names: Vec<String>, history: usize, strip_ansi: bool) -> Self {
-        let panes = names
+    /// One pane per `(name, color)`, in source order.
+    pub fn new(panes: Vec<(String, PaneColor)>, library: Arc<Library>, history: usize, strip_ansi: bool) -> Self {
+        let panes = panes
             .into_iter()
-            .map(|name| Pane { name, status: None, restarts: 0, buffer: Buffer::new(history) })
+            .map(|(name, color)| Pane { name, status: None, restarts: 0, color, buffer: Buffer::new(history) })
             .collect();
-        Self { panes, mode: Mode::Panes, strip_ansi, quit: false }
+        Self { panes, mode: Mode::Panes, strip_ansi, quit: false, library }
+    }
+
+    /// Panes with automatic coloring, for tests.
+    #[cfg(test)]
+    pub fn with_names(names: &[&str]) -> Self {
+        let library = Arc::new(Library::new(&Default::default()).unwrap());
+        let panes = names
+            .iter()
+            .map(|n| (n.to_string(), PaneColor::new(crate::color::Choice::Auto, &library, true).unwrap()))
+            .collect();
+        Self::new(panes, library, 100, false)
     }
 
     pub fn ingest(&mut self, id: SourceId, event: SourceEvent) {
         let Some(pane) = self.panes.get_mut(id) else { return };
         match event {
-            SourceEvent::Line(line) => pane.buffer.push(line),
+            SourceEvent::Line(line) => {
+                pane.color.observe(&line, &self.library);
+                pane.buffer.push(line);
+            }
             SourceEvent::Reset(reason) => {
                 tracing::info!(source = %pane.name, reason, "reset");
                 pane.buffer.clear_view(Local::now(), reason);
@@ -98,6 +119,12 @@ impl App {
                 }
                 KeyCode::Char('n') => self.select(SelectPurpose::Clear),
                 KeyCode::Char('b') => self.select(SelectPurpose::Scrollback),
+                KeyCode::Char('c') => self.select(SelectPurpose::Color),
+                KeyCode::Char('C') => {
+                    // Off if any pane is colored, otherwise on everywhere.
+                    let on = !self.panes.iter().any(|p| p.color.active().is_some());
+                    self.panes.iter_mut().filter(|p| p.color.available()).for_each(|p| p.color.enabled = on);
+                }
                 _ => {}
             },
             Mode::Select { purpose, selected } => {
@@ -157,6 +184,11 @@ impl App {
             }
             SelectPurpose::Scrollback => {
                 self.mode = Mode::Scrollback(Scrollback { pane, top: None, shown_top: 0, page: 0 });
+            }
+            SelectPurpose::Color => {
+                let color = &mut self.panes[pane].color;
+                color.enabled = !color.enabled && color.available();
+                self.mode = Mode::Panes;
             }
         }
     }
@@ -250,7 +282,8 @@ mod tests {
     }
 
     fn app(n: usize) -> App {
-        let mut app = App::new((0..n).map(|i| format!("p{i}")).collect(), 100, false);
+        let names: Vec<String> = (0..n).map(|i| format!("p{i}")).collect();
+        let mut app = App::with_names(&names.iter().map(String::as_str).collect::<Vec<_>>());
         for (id, _) in (0..n).enumerate() {
             for l in 0..5 {
                 app.ingest(id, SourceEvent::Line(format!("{id}-{l}")));
@@ -282,6 +315,21 @@ mod tests {
         status(&mut a, SourceStatus::Error("x".into()));
         status(&mut a, SourceStatus::Running);
         assert_eq!(a.panes[0].restarts, 2);
+    }
+
+    #[test]
+    fn color_toggles() {
+        let mut a = app(2);
+        let enabled = |a: &App| a.panes.iter().map(|p| p.color.enabled).collect::<Vec<_>>();
+        assert_eq!(enabled(&a), [true, true]);
+        press(&mut a, KeyCode::Char('c'));
+        assert!(matches!(a.mode, Mode::Select { purpose: SelectPurpose::Color, .. }));
+        press(&mut a, KeyCode::Char('2'));
+        assert_eq!(enabled(&a), [true, false]);
+        press(&mut a, KeyCode::Char('C'));
+        assert_eq!(enabled(&a), [false, false], "some pane colored: C turns all off");
+        press(&mut a, KeyCode::Char('C'));
+        assert_eq!(enabled(&a), [true, true]);
     }
 
     #[test]

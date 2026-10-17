@@ -30,6 +30,10 @@ pub struct Cli {
     #[arg(long)]
     pub strip_ansi: bool,
 
+    /// Start with mtr's own coloring off (toggle with c/C).
+    #[arg(long)]
+    pub no_color: bool,
+
     /// Where mtr writes its own logs (level set by MTR_LOG, default `info`).
     #[arg(long, value_name = "PATH", default_value_os_t = std::env::temp_dir().join("mtr.log"))]
     pub log_file: PathBuf,

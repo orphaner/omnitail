@@ -6,10 +6,11 @@ use ratatui::widgets::Paragraph;
 use super::text;
 use crate::app::{Pane, Scrollback};
 use crate::buffer::{Buffer, Seq};
+use crate::color::Scheme;
 
 pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, pane: &Pane, strip: bool) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
-    let view = layout(&pane.buffer, sb.top, body.width, body.height, strip);
+    let view = layout(&pane.buffer, sb.top, body.width, body.height, strip, pane.color.active());
     sb.top = view.top;
     sb.shown_top = view.shown_top;
     sb.page = body.height as usize;
@@ -24,7 +25,7 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, pane: &Pane, s
         buffer.first_seq() + 1,
         buffer.end_seq()
     );
-    super::render_title(frame, title, sb.pane, pane, right);
+    super::render_title(frame, title, sb.pane, pane, &[right]);
     frame.render_widget(Paragraph::new(view.rows), body);
 }
 
@@ -37,19 +38,19 @@ struct View {
 
 /// Rows at position `seq`: clear marks that sit just before line `seq`,
 /// then the line itself (positions go up to `end_seq`, which has no line).
-fn position_rows(buffer: &Buffer, seq: Seq, width: usize, strip: bool) -> Vec<Line<'static>> {
+fn position_rows(buffer: &Buffer, seq: Seq, width: usize, strip: bool, scheme: Option<&Scheme>) -> Vec<Line<'static>> {
     let mut rows: Vec<Line<'static>> = buffer
         .clears()
         .filter(|m| m.seq == seq)
         .map(|m| Line::styled(format!("──── {} at {} ────", m.reason, m.at.format("%H:%M:%S")), super::dim()))
         .collect();
     if let Some(line) = buffer.get(seq) {
-        rows.extend(text::rows(line, width, strip));
+        rows.extend(text::rows(line, width, strip, scheme));
     }
     rows
 }
 
-fn layout(buffer: &Buffer, top: Option<Seq>, width: u16, height: u16, strip: bool) -> View {
+fn layout(buffer: &Buffer, top: Option<Seq>, width: u16, height: u16, strip: bool, scheme: Option<&Scheme>) -> View {
     let (width, height) = (width as usize, height as usize);
     let (first, end) = (buffer.first_seq(), buffer.end_seq());
 
@@ -58,7 +59,7 @@ fn layout(buffer: &Buffer, top: Option<Seq>, width: u16, height: u16, strip: boo
         let mut rows = Vec::new();
         let mut seq = top;
         while seq <= end && rows.len() <= height {
-            rows.extend(position_rows(buffer, seq, width, strip));
+            rows.extend(position_rows(buffer, seq, width, strip, scheme));
             seq += 1;
         }
         // Content from `top` overflows the screen: stay anchored there.
@@ -74,7 +75,7 @@ fn layout(buffer: &Buffer, top: Option<Seq>, width: u16, height: u16, strip: boo
     let mut seq = end + 1;
     while seq > first && count < height {
         seq -= 1;
-        let rows = position_rows(buffer, seq, width, strip);
+        let rows = position_rows(buffer, seq, width, strip, scheme);
         count += rows.len();
         chunks.push(rows);
     }
@@ -103,7 +104,7 @@ mod tests {
 
     #[test]
     fn follows_the_end() {
-        let v = layout(&buffer(10), None, 20, 3, false);
+        let v = layout(&buffer(10), None, 20, 3, false, None);
         assert_eq!(plain(&v), ["l7", "l8", "l9"]);
         assert_eq!((v.top, v.shown_top), (None, 7));
     }
@@ -111,11 +112,11 @@ mod tests {
     #[test]
     fn anchored_view_and_back_to_follow_at_the_end() {
         let b = buffer(10);
-        let v = layout(&b, Some(2), 20, 3, false);
+        let v = layout(&b, Some(2), 20, 3, false, None);
         assert_eq!(plain(&v), ["l2", "l3", "l4"]);
         assert_eq!(v.top, Some(2));
 
-        let v = layout(&b, Some(8), 20, 3, false);
+        let v = layout(&b, Some(8), 20, 3, false, None);
         assert_eq!(v.top, None, "end in view: following again");
         assert_eq!(plain(&v), ["l7", "l8", "l9"]);
     }
@@ -125,7 +126,7 @@ mod tests {
         let mut b = buffer(2);
         b.clear_view(Local::now(), "cleared");
         b.push("after".into());
-        let rows = plain(&layout(&b, None, 40, 10, false));
+        let rows = plain(&layout(&b, None, 40, 10, false, None));
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[1], "l1");
         assert!(rows[2].contains("cleared at"));
@@ -136,7 +137,7 @@ mod tests {
     fn mark_after_last_line_is_visible() {
         let mut b = buffer(2);
         b.clear_view(Local::now(), "cleared");
-        let rows = plain(&layout(&b, None, 40, 10, false));
+        let rows = plain(&layout(&b, None, 40, 10, false, None));
         assert!(rows.last().unwrap().contains("cleared at"));
     }
 }

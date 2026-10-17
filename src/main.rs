@@ -1,20 +1,22 @@
 mod app;
 mod buffer;
 mod cli;
+mod color;
 mod config;
 mod source;
 mod spec;
 mod ui;
 
 use std::fs::File;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 use crate::app::App;
+use crate::color::{Library, PaneColor};
 use crate::config::Settings;
 use crate::source::Emitter;
 
@@ -29,6 +31,13 @@ async fn main() -> Result<()> {
     // Before the TUI starts, so that errors (e.g. no compose project) print normally.
     let sources = source::expand(settings.sources).await?;
 
+    // Validates scheme names and rules before anything starts.
+    let library = Arc::new(Library::new(&settings.schemes).map_err(|e| anyhow!(e))?);
+    let panes = sources
+        .iter()
+        .map(|s| Ok((s.title(), PaneColor::new(s.color_choice(), &library, settings.color).map_err(|e| anyhow!(e))?)))
+        .collect::<Result<Vec<_>>>()?;
+
     let (tx, rx) = mpsc::channel(EVENT_QUEUE);
     let pane_heights = pane_heights(sources.len());
     for (id, config) in sources.iter().enumerate() {
@@ -37,7 +46,7 @@ async fn main() -> Result<()> {
     }
     drop(tx);
 
-    let mut app = App::new(sources.iter().map(|s| s.title()).collect(), settings.history, settings.strip_ansi);
+    let mut app = App::new(panes, library, settings.history, settings.strip_ansi);
     // `init` also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     let result = app::run(&mut terminal, &mut app, rx).await;

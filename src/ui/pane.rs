@@ -6,6 +6,7 @@ use ratatui::widgets::Paragraph;
 use super::text;
 use crate::app::Pane;
 use crate::buffer::{Buffer, Seq};
+use crate::color::Scheme;
 
 fn split(area: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area)
@@ -19,25 +20,33 @@ pub fn body(area: Rect) -> Rect {
 pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, strip: bool) {
     let [title, body] = split(area);
     let hidden = pane.buffer.view_start() - pane.buffer.first_seq();
-    let mut right = super::lines_count(pane.buffer.len());
+    let mut count = super::lines_count(pane.buffer.len());
     if hidden > 0 {
-        right.push_str(&format!(" ({hidden} hidden)"));
+        count.push_str(&format!(" ({hidden} hidden)"));
     }
-    super::render_title(frame, title, index, pane, right);
-    let rows = tail_rows(&pane.buffer, pane.buffer.view_start(), body.width, body.height, strip);
+    let full = format!("{}{count}", super::color_label(pane));
+    super::render_title(frame, title, index, pane, &[full, count]);
+    let rows = tail_rows(&pane.buffer, pane.buffer.view_start(), body.width, body.height, strip, pane.color.active());
     frame.render_widget(Paragraph::new(rows), body);
 }
 
 /// The last `height` rows of lines from `start` on, bottom-anchored like a
 /// terminal: the newest line is always on the last row.
-fn tail_rows(buffer: &Buffer, start: Seq, width: u16, height: u16, strip: bool) -> Vec<Line<'static>> {
+fn tail_rows(
+    buffer: &Buffer,
+    start: Seq,
+    width: u16,
+    height: u16,
+    strip: bool,
+    scheme: Option<&Scheme>,
+) -> Vec<Line<'static>> {
     let height = height as usize;
     let mut chunks = Vec::new();
     let mut count = 0;
     let mut seq = buffer.end_seq();
     while seq > start && count < height {
         seq -= 1;
-        let rows = text::rows(buffer.get(seq).unwrap_or_default(), width as usize, strip);
+        let rows = text::rows(buffer.get(seq).unwrap_or_default(), width as usize, strip, scheme);
         count += rows.len();
         chunks.push(rows);
     }
@@ -56,9 +65,9 @@ mod tests {
         for l in ["one", "abcdef", "z"] {
             b.push(l.into());
         }
-        let rows: Vec<String> = tail_rows(&b, 0, 3, 2, false).iter().map(|l| l.to_string()).collect();
+        let rows: Vec<String> = tail_rows(&b, 0, 3, 2, false, None).iter().map(|l| l.to_string()).collect();
         assert_eq!(rows, ["def", "z"]);
-        let rows: Vec<String> = tail_rows(&b, 2, 3, 5, false).iter().map(|l| l.to_string()).collect();
+        let rows: Vec<String> = tail_rows(&b, 2, 3, 5, false, None).iter().map(|l| l.to_string()).collect();
         assert_eq!(rows, ["z"], "lines before start (cleared) are hidden");
     }
 }

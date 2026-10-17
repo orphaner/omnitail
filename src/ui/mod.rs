@@ -61,8 +61,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     render_keys(frame, status_bar, &app.mode);
 }
 
-/// One-line header: index, name and status on the left, `right` on the right.
-fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right: String) {
+/// One-line header: index, name and status on the left, then on the right
+/// the first of `right` (longest to shortest) that fits.
+fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right: &[String]) {
     let (status, color) = match &pane.status {
         None => ("starting".to_string(), MUTED),
         Some(s @ SourceStatus::Running) => (s.to_string(), OK),
@@ -86,9 +87,9 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
     let left_width = left.width() as u16;
     frame.render_widget(Paragraph::new(left).style(style), area);
     // Right part only in the space left over; dropped rather than overlapping.
-    let right = format!("{right} ");
     let free = area.width.saturating_sub(left_width + 1);
-    if right.chars().count() as u16 <= free {
+    let fits = right.iter().map(|r| format!("{r} ")).find(|r| r.chars().count() as u16 <= free);
+    if let Some(right) = fits {
         let right_area = Rect { x: area.right() - free, width: free, ..area };
         frame.render_widget(Paragraph::new(right).style(style).alignment(Alignment::Right), right_area);
     }
@@ -112,13 +113,30 @@ fn ellipsize(s: &str, max: usize) -> String {
     out
 }
 
+/// "http · " for a colored pane, "http off · " once toggled off, nothing
+/// for a pane without coloring.
+fn color_label(pane: &Pane) -> String {
+    match (pane.color.available(), pane.color.enabled) {
+        (false, _) => String::new(),
+        (true, true) => format!("{} · ", pane.color.label),
+        (true, false) => format!("{} off · ", pane.color.label),
+    }
+}
+
 fn lines_count(n: usize) -> String {
     if n == 1 { "1 line".into() } else { format!("{n} lines") }
 }
 
 fn render_keys(frame: &mut Frame, area: Rect, mode: &Mode) {
     let keys: &[(&str, &str)] = match mode {
-        Mode::Panes => &[("q", "Quit"), ("b", "Scrollback"), ("N", "Clear all"), ("n", "Clear one")],
+        Mode::Panes => &[
+            ("q", "Quit"),
+            ("b", "Scrollback"),
+            ("N", "Clear all"),
+            ("n", "Clear one"),
+            ("C", "Colors all"),
+            ("c", "Colors one"),
+        ],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],
         Mode::Scrollback(_) => &[
             ("↑↓ jk", "Line"),
@@ -167,7 +185,7 @@ mod tests {
     }
 
     fn demo() -> App {
-        let mut app = App::new(vec!["file:a.log".into(), "cmd:ping".into()], 100, false);
+        let mut app = App::with_names(&["file:a.log", "cmd:ping"]);
         app.ingest(0, SourceEvent::Status(SourceStatus::Running));
         for i in 0..20 {
             app.ingest(0, SourceEvent::Line(format!("a{i}")));
@@ -192,7 +210,7 @@ mod tests {
 
     #[test]
     fn long_name_keeps_status_visible() {
-        let mut app = App::new(vec![format!("file:/{}/x.log", "deep/".repeat(20))], 100, false);
+        let mut app = App::with_names(&[&format!("file:/{}/x.log", "deep/".repeat(20))]);
         app.ingest(0, SourceEvent::Status(SourceStatus::Running));
         let s = screen(&mut app);
         let title = s.lines().next().unwrap();

@@ -1,0 +1,64 @@
+# Built-in color schemes. Same format as `[scheme.<name>]` in a user config.
+# Rules are tried in order; where two rules match the same text, the first wins.
+# Styles: names (red, green, yellow, blue, magenta, cyan, white, gray, orange,
+# black) map to fixed 256-palette colors; 0-255 and #rrggbb work too.
+
+# Sober defaults for any log: levels and timestamps first.
+[scheme.generic]
+rules = [
+  { regex = '(?i)\b(?:fatal|panic|crit(?:ical)?|err(?:or)?|fail(?:ed|ure)?|exception)\b', style = "red bold" },
+  { regex = '(?i)\bwarn(?:ing)?\b', style = "yellow bold" },
+  { regex = '(?i)\b(?:info|notice)\b', style = "green" },
+  { regex = '(?i)\b(?:debug|trace)\b', style = "gray" },
+  { regex = '\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?', style = "gray" },
+  { regex = '\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2}\b', style = "gray" },
+  { regex = '\b\d{2}:\d{2}:\d{2}(?:[.,]\d+)?\b', style = "gray" },
+  { regex = '''\bhttps?://[^\s"'<>]+''', style = "blue underline" },
+  { regex = '\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b', style = "magenta" },
+  { regex = '\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b', style = "cyan" },
+  { regex = '\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b', style = "cyan" },
+  { regex = '\b\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h)\b', style = "magenta" },
+]
+
+# Access logs in the nginx/apache "combined" format.
+[scheme.http]
+rules = [
+  { regex = '^(\S+)', group = 1, style = "cyan" },
+  { regex = '\[(\d{2}/\w{3}/\d{4}:[^\]]+)\]', group = 1, style = "gray" },
+  { regex = '"(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|CONNECT|TRACE) ', group = 1, style = "bold" },
+  { regex = '" (2\d\d) ', group = 1, style = "green" },
+  { regex = '" (3\d\d) ', group = 1, style = "blue" },
+  { regex = '" (4\d\d) ', group = 1, style = "yellow bold" },
+  { regex = '" (5\d\d) ', group = 1, style = "red bold" },
+]
+
+# One JSON object per line.
+[scheme.json]
+rules = [
+  { regex = '"(?:level|lvl|severity)"\s*:\s*"((?i:fatal|panic|crit\w*|err\w*))"', group = 1, style = "red bold" },
+  { regex = '"(?:level|lvl|severity)"\s*:\s*"((?i:warn\w*))"', group = 1, style = "yellow bold" },
+  { regex = '"(?:level|lvl|severity)"\s*:\s*"((?i:info|notice))"', group = 1, style = "green" },
+  { regex = '"(?:level|lvl|severity)"\s*:\s*"((?i:debug|trace))"', group = 1, style = "gray" },
+  { regex = '"((?:[^"\\]|\\.)*)"\s*:', group = 1, style = "blue" },
+  { regex = ':\s*("(?:[^"\\]|\\.)*")', group = 1, style = "180" },
+  { regex = ':\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)\b', group = 1, style = "magenta" },
+]
+
+# key=value pairs (logfmt): levels stand out, keys step back.
+[scheme.logfmt]
+rules = [
+  { regex = '\b(?:level|lvl)=((?i:fatal|panic|crit\w*|err\w*))\b', group = 1, style = "red bold" },
+  { regex = '\b(?:level|lvl)=((?i:warn\w*))\b', group = 1, style = "yellow bold" },
+  { regex = '\b(?:level|lvl)=((?i:info|notice))\b', group = 1, style = "green" },
+  { regex = '\b(?:level|lvl)=((?i:debug|trace))\b', group = 1, style = "gray" },
+  { regex = '([\w.\-]+)=', group = 1, style = "gray" },
+  { regex = '=("(?:[^"\\]|\\.)*")', group = 1, style = "180" },
+]
+
+# Classic syslog: "Oct 17 21:03:04 host process[pid]: message".
+[scheme.syslog]
+rules = [
+  { regex = '^(\w{3} [ \d]\d \d{2}:\d{2}:\d{2})', group = 1, style = "gray" },
+  { regex = '^\w{3} [ \d]\d \d{2}:\d{2}:\d{2} (\S+)', group = 1, style = "cyan" },
+  { regex = '^\w{3} [ \d]\d \d{2}:\d{2}:\d{2} \S+ ([^\s\[:]+)', group = 1, style = "bold" },
+]

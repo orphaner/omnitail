@@ -3,6 +3,9 @@ name = "omnitail"
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+description = "Follow many log streams at once, in stacked panes: files, commands, docker, compose, kubernetes"
+repository = "https://github.com/orphaner/omnitail"
+homepage = "https://github.com/orphaner/omnitail"
 
 [dependencies]
 ansi-to-tui = "8.0.1"
@@ -25,3 +28,8 @@ unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

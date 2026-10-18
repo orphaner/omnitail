@@ -2,6 +2,16 @@
 
 A modern take on [multitail](https://www.vanheusden.com/multitail/), in Rust: follow several log streams at once, in stacked panes, from files, commands or containers.
 
+## Install
+
+With Homebrew, on macOS or Linux (WSL included):
+
+```bash
+brew install orphaner/tap/omnitail
+```
+
+Or download an archive from the [releases](https://github.com/orphaner/omnitail/releases), or build it: `cargo install --git https://github.com/orphaner/omnitail`.
+
 ## Usage
 
 ```bash

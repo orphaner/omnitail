@@ -25,6 +25,7 @@ pub const PANES: Section = Section {
         ("N n", "clear all panes / one pane"),
         ("P p", "pause all panes / one pane"),
         ("C c", "colors on/off: all / one pane"),
+        ("s", "color scheme of a pane (filterable list)"),
         ("w", "wrap long lines, or cut them"),
         ("h F1", "this help"),
         ("q Esc", "quit"),
@@ -64,7 +65,7 @@ pub const DETAIL: Section = Section {
 };
 
 pub const PICKER: Section = Section {
-    title: "Choosing a pane (popup of b n e p c)",
+    title: "Choosing a pane (popup of b n e p c s)",
     keys: &[("1-9", "that pane"), ("↑ ↓ Enter", "move, then choose"), ("Esc", "cancel")],
 };
 
@@ -94,7 +95,7 @@ pub const PATTERNS: Section = Section {
 /// or everything with `all`.
 pub fn sections(mode: &Mode, all: bool) -> Vec<&'static Section> {
     let mut shown: Vec<&Section> = match mode {
-        Mode::Panes | Mode::Select { .. } => vec![&PANES, &PICKER, &PROMPT, &PATTERNS],
+        Mode::Panes | Mode::Select { .. } | Mode::Schemes(_) => vec![&PANES, &PICKER, &PROMPT, &PATTERNS],
         Mode::Scrollback(_) => vec![&HISTORY, &PROMPT, &PATTERNS],
         Mode::Detail(_) => vec![&DETAIL],
     };
@@ -111,7 +112,7 @@ pub fn sections(mode: &Mode, all: bool) -> Vec<&'static Section> {
 /// Short name of the view, for the title.
 fn view_name(mode: &Mode) -> &'static str {
     match mode {
-        Mode::Panes | Mode::Select { .. } => "panes",
+        Mode::Panes | Mode::Select { .. } | Mode::Schemes(_) => "panes",
         Mode::Scrollback(sb) if matches!(sb.target, crate::view::Target::Merged(_)) => "merged history",
         Mode::Scrollback(_) => "history",
         Mode::Detail(_) => "line detail",

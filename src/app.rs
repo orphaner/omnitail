@@ -12,7 +12,7 @@ use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
 use crate::buffer::{Buffer, Entry, Seq};
-use crate::color::{Library, PaneColor, Scheme};
+use crate::color::{Choice, FALLBACK, Library, PaneColor, Scheme};
 use crate::pattern::Pattern;
 use crate::source::{SourceEvent, SourceId, SourceStatus};
 use crate::view::{HistoryView, Merged, Pos, Target};
@@ -53,6 +53,7 @@ pub enum SelectPurpose {
     Color,
     Pause,
     Filter,
+    Scheme,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,7 +63,29 @@ pub enum Mode {
     Select { purpose: SelectPurpose, selected: usize },
     Scrollback(Scrollback),
     Detail(Detail),
+    /// Popup choosing a pane's color scheme.
+    Schemes(SchemePicker),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemePicker {
+    pub pane: usize,
+    /// Typed text narrowing the list.
+    pub query: String,
+    /// Index in the filtered list.
+    pub selected: usize,
+}
+
+/// One line of the scheme popup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchemeEntry {
+    pub name: String,
+    pub origin: &'static str,
+    pub description: String,
+}
+
+/// Lines of history fed to detection when a pane goes back to `auto`.
+const REDETECT_LINES: u64 = 20;
 
 /// Full-screen history of one pane (`b`) or of all of them merged (`B`),
 /// with a line cursor, a filter and a search.
@@ -310,7 +333,8 @@ impl App {
             return;
         }
         let opens_help = matches!(key.code, KeyCode::Char('h') | KeyCode::F(1));
-        if opens_help && !matches!(self.mode, Mode::Select { .. }) {
+        // Not over popups: there, h picks a pane or is typed in the filter.
+        if opens_help && !matches!(self.mode, Mode::Select { .. } | Mode::Schemes(_)) {
             self.help = Some(Help::default());
             return;
         }
@@ -319,6 +343,78 @@ impl App {
             Mode::Select { purpose, selected } => self.select_key(purpose, selected, key),
             Mode::Scrollback(sb) => self.scrollback_key(sb, key),
             Mode::Detail(d) => self.detail_key(d, key),
+            Mode::Schemes(picker) => self.schemes_key(picker, key),
+        }
+    }
+
+    /// The scheme popup's choices matching `query` (name or description).
+    pub fn scheme_entries(&self, query: &str) -> Vec<SchemeEntry> {
+        let special = [("auto", "guess from the lines (default)"), ("none", "no coloring by mtr")]
+            .map(|(name, description)| SchemeEntry { name: name.into(), origin: "", description: description.into() });
+        let schemes = self.library.list().map(|(name, info)| SchemeEntry {
+            name: name.to_owned(),
+            origin: info.origin.label(),
+            description: info.description.clone().unwrap_or_default(),
+        });
+        let query = query.to_lowercase();
+        special
+            .into_iter()
+            .chain(schemes)
+            .filter(|e| e.name.to_lowercase().contains(&query) || e.description.to_lowercase().contains(&query))
+            .collect()
+    }
+
+    fn schemes_key(&mut self, mut picker: SchemePicker, key: KeyEvent) {
+        let count = self.scheme_entries(&picker.query).len();
+        let last = count.saturating_sub(1);
+        match key.code {
+            KeyCode::Esc => return,
+            KeyCode::Enter => {
+                if let Some(entry) = self.scheme_entries(&picker.query).get(picker.selected) {
+                    self.set_scheme(picker.pane, &entry.name);
+                }
+                return;
+            }
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down => picker.selected = (picker.selected + 1).min(last),
+            KeyCode::PageUp => picker.selected = picker.selected.saturating_sub(10),
+            KeyCode::PageDown => picker.selected = (picker.selected + 10).min(last),
+            KeyCode::Home => picker.selected = 0,
+            KeyCode::End => picker.selected = last,
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.selected = 0;
+            }
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                picker.query.push(c);
+                picker.selected = 0;
+            }
+            _ => {}
+        }
+        self.mode = Mode::Schemes(picker);
+    }
+
+    /// Gives `pane` the scheme `name` (or "auto", "none"), chained with
+    /// the fallback like detected and path-chosen schemes.
+    fn set_scheme(&mut self, pane: usize, name: &str) {
+        let choice = match name {
+            "auto" => Choice::Auto,
+            "none" => Choice::Off,
+            FALLBACK => Choice::Named(vec![FALLBACK.into()]),
+            name => Choice::Named(vec![name.into(), FALLBACK.into()]),
+        };
+        match PaneColor::new(choice, &self.library, true) {
+            Ok(mut color) => {
+                // Detection starts again from what is already there.
+                let buffer = &self.panes[pane].buffer;
+                let from = buffer.end_seq().saturating_sub(REDETECT_LINES).max(buffer.first_seq());
+                for seq in from..buffer.end_seq() {
+                    color.observe(buffer.get(seq).unwrap_or_default(), &self.library);
+                }
+                self.notice = Some(format!("pane {}: {}", pane + 1, color.label));
+                self.panes[pane].color = color;
+            }
+            Err(e) => self.notice = Some(e),
         }
     }
 
@@ -351,6 +447,7 @@ impl App {
                 }
             }
             KeyCode::Char('e') => self.select(SelectPurpose::Filter),
+            KeyCode::Char('s') => self.select(SelectPurpose::Scheme),
             KeyCode::Char('E') => {
                 // Start from the common filter, if all panes share one.
                 let first = self.panes[0].filter.as_ref().map(|f| f.text.clone());
@@ -648,6 +745,12 @@ impl App {
             SelectPurpose::Filter => {
                 let input = self.panes[pane].filter.as_ref().map(|f| f.text.clone()).unwrap_or_default();
                 self.prompt = Some(Prompt::new(PromptKind::PaneFilter(Some(pane)), input));
+            }
+            SelectPurpose::Scheme => {
+                // Start on the pane's current choice.
+                let current = &self.panes[pane].color.choice;
+                let selected = self.scheme_entries("").iter().position(|e| &e.name == current).unwrap_or(0);
+                self.mode = Mode::Schemes(SchemePicker { pane, query: String::new(), selected });
             }
         }
     }
@@ -1163,6 +1266,37 @@ mod tests {
         press(&mut a, KeyCode::Char('n'));
         press(&mut a, KeyCode::Char('h'));
         assert!(a.help.is_none(), "not over the pane picker");
+    }
+
+    #[test]
+    fn scheme_popup_filters_and_applies() {
+        let mut a = App::with_names(&["a", "b"]);
+        a.ingest(1, line(r#"{"level":"info"}"#));
+        press(&mut a, KeyCode::Char('s'));
+        press(&mut a, KeyCode::Char('2'));
+        let Mode::Schemes(p) = &a.mode else { panic!("{:?}", a.mode) };
+        assert_eq!(a.scheme_entries("")[p.selected].name, "auto", "starts on the current choice");
+
+        type_text(&mut a, "fail2ban");
+        let Mode::Schemes(p) = &a.mode else { panic!("h typed in the filter must not open the help") };
+        assert!(a.help.is_none());
+        assert_eq!(a.scheme_entries(&p.query).iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["f2b"]);
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.mode, Mode::Panes);
+        assert_eq!((a.panes[1].color.choice.as_str(), a.panes[1].color.label.as_str()), ("f2b", "f2b"));
+
+        // Back to auto: detection runs on the lines already there.
+        press(&mut a, KeyCode::Char('s'));
+        press(&mut a, KeyCode::Char('2'));
+        type_text(&mut a, "auto");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.panes[1].color.label, "json");
+
+        press(&mut a, KeyCode::Char('s'));
+        press(&mut a, KeyCode::Char('1'));
+        type_text(&mut a, "none");
+        press(&mut a, KeyCode::Enter);
+        assert!(a.panes[0].color.active().is_none());
     }
 
     #[test]

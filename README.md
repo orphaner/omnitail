@@ -65,6 +65,7 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 | `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove) |
 | `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
 | `C` / `c` | mtr's coloring on/off for all panes / one pane |
+| `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none`, or any scheme) |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).

@@ -18,6 +18,8 @@ pub struct PaneColor {
     pub scheme: Option<Arc<Scheme>>,
     /// Short name for the title: the scheme, or the detected format.
     pub label: String,
+    /// What was chosen: "auto", "none", or the main scheme's name.
+    pub choice: String,
     /// Lines kept while guessing the format; `None` once settled.
     sample: Option<Vec<String>>,
 }
@@ -37,15 +39,26 @@ impl PaneColor {
                 enabled,
                 scheme: Some(library.resolve(&[FALLBACK.into()])?),
                 label: "auto".into(),
+                choice: "auto".into(),
                 sample: Some(Vec::new()),
             },
-            Choice::Named(names) => Self {
-                enabled,
-                scheme: Some(library.resolve(&names)?),
-                label: names.join("+"),
-                sample: None,
-            },
-            Choice::Off => Self { enabled: false, scheme: None, label: "none".into(), sample: None },
+            Choice::Named(names) => {
+                // "ssh" rather than "ssh+generic": the fallback goes without saying.
+                let shown = match &names[..] {
+                    [rest @ .., last] if !rest.is_empty() && last == FALLBACK => rest,
+                    all => all,
+                };
+                Self {
+                    enabled,
+                    scheme: Some(library.resolve(&names)?),
+                    label: shown.join("+"),
+                    choice: names.first().cloned().unwrap_or_default(),
+                    sample: None,
+                }
+            }
+            Choice::Off => {
+                Self { enabled: false, scheme: None, label: "none".into(), choice: "none".into(), sample: None }
+            }
         })
     }
 
@@ -92,6 +105,7 @@ mod tests {
         color.observe(r#"{"level":"info"}"#, &lib);
         assert_eq!(color.label, "json");
         assert_eq!(color.active().unwrap().name, "json+generic");
+        assert_eq!(color.choice, "auto");
         for _ in 0..detect::SAMPLE {
             color.observe("plain", &lib);
         }
@@ -107,6 +121,8 @@ mod tests {
         let lib = Library::new(&HashMap::new()).unwrap();
         let off = PaneColor::new(Choice::Off, &lib, true).unwrap();
         assert!(off.active().is_none() && !off.available());
+        let chained = PaneColor::new(Choice::Named(vec!["ssh".into(), FALLBACK.into()]), &lib, true).unwrap();
+        assert_eq!((chained.label.as_str(), chained.choice.as_str()), ("ssh", "ssh"));
         let mut named = PaneColor::new(Choice::Named(vec!["http".into()]), &lib, true).unwrap();
         assert!(named.active().is_some());
         named.enabled = false;

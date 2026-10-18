@@ -20,6 +20,73 @@ EXCLUDED = {
     "boinc", "boinctail", "lambdamoo", "motion", "ii",
 }
 
+# Descriptions to search by in mtr's scheme popup: multitail's are often
+# missing or just a URL.
+DESCRIPTIONS = {
+    "syslog": "syslog: kernel and system messages",
+    "zarafa": "Zarafa groupware (mail, calendar)",
+    "weblogic": "Oracle WebLogic Java application server",
+    "goldengate": "Oracle GoldenGate database replication",
+    "ssh": "OpenSSH server (sshd): logins, auth failures",
+    "powerdns": "PowerDNS DNS server",
+    "logcat": "Android logcat",
+    "liniptfw": "Linux iptables firewall (kernel log)",
+    "postfix": "Postfix mail server (MTA)",
+    "apache": "Apache/lighttpd web server access log",
+    "apache_error": "Apache web server error log",
+    "acctail": "BSD process accounting",
+    "wtmptail": "wtmp: user logins and logouts",
+    "squid": "Squid HTTP proxy cache",
+    "sendmail": "Sendmail mail server (MTA)",
+    "mailscanner": "MailScanner mail filter (virus, spam)",
+    "spamassassin": "SpamAssassin mail spam filter",
+    "clamav": "ClamAV antivirus daemon (clamd)",
+    "samba": "Samba Windows file sharing (SMB)",
+    "audit": "Linux audit daemon (auditd)",
+    "exim": "Exim mail server (MTA)",
+    "httping": "httping: ping for HTTP servers",
+    "netstat": "netstat network connections",
+    "tcpdump": "tcpdump network packet capture",
+    "dhcpd": "ISC DHCP server",
+    "bind": "BIND named DNS server",
+    "smartd": "smartd disk health (S.M.A.R.T.)",
+    "kerberos": "Kerberos authentication (KDC)",
+    "oracle": "Oracle database",
+    "ntpd": "NTP time server",
+    "websphere": "IBM WebSphere Java application server",
+    "procmail": "procmail mail delivery and filtering",
+    "checkpoint": "Check Point Firewall-1",
+    "pppd": "PPP daemon (dial-up, VPN links)",
+    "netscapeldap": "Netscape Directory Server (LDAP)",
+    "vmstat": "vmstat: memory, CPU, IO statistics",
+    "mpstat": "mpstat: per-CPU statistics",
+    "log4j": "Java log4j logging",
+    "log4jnew": "Java log4j logging, newer layout",
+    "p0f": "p0f passive OS fingerprinting (network)",
+    "portsentry": "PortSentry port scan detection",
+    "strace": "strace system call tracing",
+    "argus": "Argus network flow auditing",
+    "snort": "Snort intrusion detection (IDS)",
+    "errpt": "AIX error reports (errpt)",
+    "mysql": "MySQL database error log",
+    "acpitail": "ACPI: temperature, battery, fans",
+    "qmt-clamd": "qmail-toaster: ClamAV mail antivirus",
+    "qmt-smtp": "qmail-toaster: SMTP mail server",
+    "qmt-send": "qmail-toaster: mail delivery (send)",
+    "qmt-spamassassin": "qmail-toaster: SpamAssassin mail spam filter",
+    "qmt-sophie": "qmail-toaster: Sophie (Sophos) mail antivirus",
+    "honeypots": "qeeqbox honeypots (security)",
+    "f2b": "Fail2ban intrusion prevention (bans)",
+    "openhab": "openHAB home automation",
+    "proftpd": "ProFTPD FTP server transfers (xferlog)",
+    "kodi": "Kodi media center",
+    "mqtt": "MQTT message broker (IoT)",
+    "cisco_ios": "Cisco IOS routers and switches",
+    "cisco_asa": "Cisco ASA firewall",
+    "dovecot": "Dovecot IMAP/POP3 mail server",
+    "uwsgi": "uWSGI Python application server",
+}
+
 ATTRIBUTES = {"bold": "bold", "blink": "bold", "inverse": "reverse", "reverse": "reverse", "underline": "underline"}
 
 HEADER = """\
@@ -111,7 +178,10 @@ def main(path):
                 if current in EXCLUDED:
                     current = None
                     continue
-                schemes[current] = {"description": (rest[0] if rest else "").strip(), "rules": [], "paths": []}
+                description = DESCRIPTIONS.get(current) or (rest[0] if rest else "").strip()
+                if current not in DESCRIPTIONS:
+                    warn(f"{where}: no description for scheme {current}")
+                schemes[current] = {"description": description, "rules": [], "paths": []}
                 order.append(current)
             elif line.startswith("scheme:"):
                 _, name, regex = line.split(":", 2)

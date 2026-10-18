@@ -60,7 +60,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             scrollback::render(frame, main, sb, &app.panes, &opts)
         }
         Mode::Detail(d) => detail::render(frame, main, d, &app.panes[d.pane], app.strip_ansi, json.as_deref()),
-        Mode::Panes | Mode::Select { .. } => {
+        Mode::Panes | Mode::Select { .. } | Mode::Schemes(_) => {
             let opts = pane::PaneOptions { strip: app.strip_ansi, wrap: app.wrap, highlight: app.highlight.as_ref() };
             let areas = Stacked.areas(main, app.panes.len());
             for (i, (pane, area)) in app.panes.iter().zip(areas).enumerate() {
@@ -70,6 +70,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if let Mode::Select { purpose, selected } = app.mode {
         popup::render(frame, main, purpose, selected, &app.panes);
+    }
+    if let Mode::Schemes(picker) = &app.mode {
+        let entries = app.scheme_entries(&picker.query);
+        popup::render_schemes(frame, main, picker, &entries, &app.panes[picker.pane].color.choice);
     }
     if let Some(help) = &mut app.help {
         help::render(frame, frame.area(), help, &app.mode);
@@ -197,8 +201,10 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("N n", "Clear"),
             ("P p", "Pause"),
             ("C c", "Colors"),
+            ("s", "Scheme"),
             ("w", "Wrap"),
         ],
+        Mode::Schemes(_) => &[("Esc", "Cancel"), ("↑↓", "Choose"), ("Enter", "Apply"), ("abc", "Filter")],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],
         Mode::Scrollback(_) if !app.wrap => &[
             ("q", "Back"),

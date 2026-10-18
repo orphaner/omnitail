@@ -1,4 +1,4 @@
-//! mtr's own coloring: regex rules grouped in schemes, built-in or from the
+//! omnitail's own coloring: regex rules grouped in schemes, built-in or from the
 //! config file, applied at render time to lines the source did not color.
 
 mod detect;

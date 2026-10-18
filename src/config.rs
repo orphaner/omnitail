@@ -31,7 +31,7 @@ const DEFAULT_HISTORY: usize = 10_000;
 pub struct ConfigFile {
     pub history: Option<usize>,
     pub strip_ansi: Option<bool>,
-    /// mtr's own coloring, on by default.
+    /// omnitail's own coloring, on by default.
     pub color: Option<bool>,
     #[serde(default, rename = "source")]
     pub sources: Vec<SourceConfig>,
@@ -48,7 +48,7 @@ impl ConfigFile {
         Ok(config)
     }
 
-    /// Paths in a config file are relative to the file, not to where mtr runs.
+    /// Paths in a config file are relative to the file, not to where omnitail runs.
     fn resolve_paths(&mut self, base: &Path) {
         let resolve = |p: &mut PathBuf| {
             if p.is_relative() {
@@ -65,7 +65,7 @@ impl ConfigFile {
     }
 }
 
-/// Everything mtr runs with, once the config file and the CLI are merged.
+/// Everything omnitail runs with, once the config file and the CLI are merged.
 #[derive(Debug)]
 pub struct Settings {
     pub sources: Vec<SourceConfig>,
@@ -109,7 +109,7 @@ mod tests {
     use super::*;
 
     fn write_config(dir: &Path, text: &str) -> PathBuf {
-        let path = dir.join("mtr.toml");
+        let path = dir.join("omnitail.toml");
         std::fs::write(&path, text).unwrap();
         path
     }
@@ -169,7 +169,7 @@ mod tests {
             scheme = "none"
             "#,
         );
-        let s = Settings::resolve(Cli::try_parse_from(["mtr", "-c", path.to_str().unwrap()]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap()]).unwrap()).unwrap();
         assert!(!s.color);
         assert_eq!(s.schemes["mine"].rules[0].group, 1);
         assert!(matches!(&s.sources[0].color_choice(), crate::color::Choice::Named(n) if n == &["mine", "generic"]));
@@ -190,17 +190,17 @@ mod tests {
         let path = write_config(dir.path(), "history = 50\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"");
         let path = path.to_str().unwrap();
 
-        let s = Settings::resolve(Cli::try_parse_from(["mtr", "-c", path, "b.log"]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "b.log"]).unwrap()).unwrap();
         let titles: Vec<_> = s.sources.iter().map(SourceConfig::title).collect();
         assert_eq!(titles, ["cmd:date", "file:b.log"]);
         assert_eq!(s.history, 50);
 
-        let s = Settings::resolve(Cli::try_parse_from(["mtr", "-c", path, "--history", "7"]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "--history", "7"]).unwrap()).unwrap();
         assert_eq!(s.history, 7);
     }
 
     #[test]
     fn stdin_only_once() {
-        assert!(Settings::resolve(Cli::try_parse_from(["mtr", "-", "-"]).unwrap()).is_err());
+        assert!(Settings::resolve(Cli::try_parse_from(["omnitail", "-", "-"]).unwrap()).is_err());
     }
 }

@@ -20,7 +20,7 @@ use crate::app::{App, Mode, Pane};
 use crate::source::SourceStatus;
 use layout::{PaneLayout, Stacked};
 
-// mtr's own chrome uses fixed 256-palette indices only, never the 16 named
+// omnitail's own chrome uses fixed 256-palette indices only, never the 16 named
 // colors: terminal themes remap those (white on light blue badges, …).
 // Log content keeps the terminal's default colors and its own ANSI styling.
 const BAR_BG: Color = Color::Indexed(236); // #303030

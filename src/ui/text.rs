@@ -14,7 +14,7 @@ pub struct Render<'a> {
     pub width: usize,
     /// Drop the source's ANSI colors.
     pub strip: bool,
-    /// mtr's coloring, for lines the source did not color.
+    /// omnitail's coloring, for lines the source did not color.
     pub scheme: Option<&'a Scheme>,
     /// Wrap long lines; otherwise cut them, marking the cut with `›`.
     pub wrap: bool,
@@ -26,7 +26,7 @@ pub struct Render<'a> {
 
 impl Render<'_> {
     /// Styles a raw line and lays it out in rows. Lines colored by their
-    /// source keep those colors (unless `strip`); the others get mtr's
+    /// source keep those colors (unless `strip`); the others get omnitail's
     /// scheme, if any. Always at least one row, so empty lines keep their place.
     pub fn rows(&self, raw: &str) -> Vec<Line<'static>> {
         let mut out = Vec::new();
@@ -262,7 +262,7 @@ mod tests {
         let source_colored = "\x1b[34mERROR\x1b[0m boom";
         assert_eq!(error_fg(&colored.rows(source_colored)), Some(Color::Blue), "source colors win");
         let stripped = Render { strip: true, ..colored };
-        assert_eq!(error_fg(&stripped.rows(source_colored)), Some(Color::Indexed(203)), "stripped, then mtr colors");
+        assert_eq!(error_fg(&stripped.rows(source_colored)), Some(Color::Indexed(203)), "stripped, then omnitail colors");
     }
 
     #[test]

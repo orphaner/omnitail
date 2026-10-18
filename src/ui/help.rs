@@ -172,7 +172,7 @@ pub fn render(frame: &mut Frame, area: Rect, help: &mut Help, mode: &Mode) {
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Fill(1), Constraint::Length(1)])
             .areas(area);
     let left = Line::from(vec![
-        Span::styled(" mtr ", Style::new().fg(super::WHITE).bg(super::BADGE_BG).bold()),
+        Span::styled(" omnitail ", Style::new().fg(super::WHITE).bg(super::BADGE_BG).bold()),
         Span::raw(if help.all { " all keys ".to_string() } else { format!(" keys · {} ", view_name(mode)) }).bold(),
     ]);
     let switch = if help.all { "Tab: this view only" } else { "Tab: all keys" };

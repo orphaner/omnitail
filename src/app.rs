@@ -349,7 +349,7 @@ impl App {
 
     /// The scheme popup's choices matching `query` (name or description).
     pub fn scheme_entries(&self, query: &str) -> Vec<SchemeEntry> {
-        let special = [("auto", "guess from the lines (default)"), ("none", "no coloring by mtr")]
+        let special = [("auto", "guess from the lines (default)"), ("none", "no coloring by omnitail")]
             .map(|(name, description)| SchemeEntry { name: name.into(), origin: "", description: description.into() });
         let schemes = self.library.list().map(|(name, info)| SchemeEntry {
             name: name.to_owned(),
@@ -806,7 +806,7 @@ pub async fn run(
     Ok(())
 }
 
-/// System clipboard tools, tried in order when mtr runs locally.
+/// System clipboard tools, tried in order when omnitail runs locally.
 const CLIPBOARD_TOOLS: &[&[&str]] = &[
     &["pbcopy"],
     &["wl-copy"],
@@ -862,7 +862,7 @@ fn base64(bytes: &[u8]) -> String {
     out
 }
 
-/// SIGTERM, SIGHUP (terminal closed) and SIGINT end mtr like `q` does, so
+/// SIGTERM, SIGHUP (terminal closed) and SIGINT end omnitail like `q` does, so
 /// that sources get dropped and their processes stopped. Ctrl+C itself
 /// arrives as a key in raw mode.
 struct Signals(#[cfg(unix)] [tokio::signal::unix::Signal; 3]);
@@ -1247,7 +1247,7 @@ mod tests {
         press(&mut a, KeyCode::Char('h'));
         assert!(a.help.is_some());
         press(&mut a, KeyCode::Char('q'));
-        assert!(a.help.is_none() && !a.quit, "q closes the help, not mtr");
+        assert!(a.help.is_none() && !a.quit, "q closes the help, not omnitail");
 
         press(&mut a, KeyCode::Char('w'));
         press(&mut a, KeyCode::Char('b'));

@@ -30,7 +30,7 @@ pub struct Cli {
     #[arg(long)]
     pub strip_ansi: bool,
 
-    /// Start with mtr's own coloring off (toggle with c/C).
+    /// Start with omnitail's own coloring off (toggle with c/C).
     #[arg(long)]
     pub no_color: bool,
 
@@ -38,8 +38,8 @@ pub struct Cli {
     #[arg(long)]
     pub list_schemes: bool,
 
-    /// Where mtr writes its own logs (level set by MTR_LOG, default `info`).
-    #[arg(long, value_name = "PATH", default_value_os_t = std::env::temp_dir().join("mtr.log"))]
+    /// Where omnitail writes its own logs (level set by OMNITAIL_LOG, default `info`).
+    #[arg(long, value_name = "PATH", default_value_os_t = std::env::temp_dir().join("omnitail.log"))]
     pub log_file: PathBuf,
 }
 
@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn parses_sources_and_options() {
-        let cli = Cli::try_parse_from(["mtr", "-n", "50", "a.log", "cmd:ping x", "docker:db"]).unwrap();
+        let cli = Cli::try_parse_from(["omnitail", "-n", "50", "a.log", "cmd:ping x", "docker:db"]).unwrap();
         assert_eq!(cli.lines, Some(50));
         assert_eq!(cli.sources.len(), 3);
         assert_eq!(cli.sources[1], SourceSpec::Cmd { command: "ping x".into() });
@@ -57,12 +57,12 @@ mod tests {
 
     #[test]
     fn requires_a_source_or_a_config() {
-        assert!(Cli::try_parse_from(["mtr"]).is_err());
-        assert!(Cli::try_parse_from(["mtr", "-c", "x.toml"]).is_ok());
+        assert!(Cli::try_parse_from(["omnitail"]).is_err());
+        assert!(Cli::try_parse_from(["omnitail", "-c", "x.toml"]).is_ok());
     }
 
     #[test]
     fn reports_bad_source() {
-        assert!(Cli::try_parse_from(["mtr", "dokcer:db"]).is_err());
+        assert!(Cli::try_parse_from(["omnitail", "dokcer:db"]).is_err());
     }
 }

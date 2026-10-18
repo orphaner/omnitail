@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Converts multitail's color schemes into mtr's scheme format.
+"""Converts multitail's color schemes into omnitail's scheme format.
 
     scripts/convert-multitail.py path/to/multitail.conf > src/color/multitail.toml
 
 multitail is MIT licensed (Copyright (c) 2023 Folkert van Heusden); the
 output keeps that notice. What does not carry over is reported on stderr:
-- value comparisons (cs_re_val_*, mcsre_val_*), which mtr does not support,
+- value comparisons (cs_re_val_*, mcsre_val_*), which omnitail does not support,
 - alternating colors ("red|blue"): the first one is kept,
 - mcsre* (merged attributes): treated like cs_re* (first rule wins).
-Regexes are POSIX ERE; mtr's test suite compiles every converted one.
+Regexes are POSIX ERE; omnitail's test suite compiles every converted one.
 """
 
 import re
@@ -20,7 +20,7 @@ EXCLUDED = {
     "boinc", "boinctail", "lambdamoo", "motion", "ii",
 }
 
-# Descriptions to search by in mtr's scheme popup: multitail's are often
+# Descriptions to search by in omnitail's scheme popup: multitail's are often
 # missing or just a URL.
 DESCRIPTIONS = {
     "syslog": "syslog: kernel and system messages",
@@ -113,7 +113,7 @@ def warn(msg):
 
 
 def style(spec, where):
-    """multitail "fg,bg,attr/attr|…" to mtr "fg bg:x attr"."""
+    """multitail "fg,bg,attr/attr|…" to omnitail "fg bg:x attr"."""
     if "|" in spec:
         warn(f"{where}: alternating colors '{spec}', keeping the first")
     parts = (spec.split("|")[0].split(",") + ["", "", ""])[:3]

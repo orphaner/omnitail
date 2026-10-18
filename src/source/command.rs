@@ -181,7 +181,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_spawn_failure() {
-        let events = collect(CommandSource::new(Box::new(|_| vec!["/nonexistent/mtr-test".into()]))).await;
+        let events = collect(CommandSource::new(Box::new(|_| vec!["/nonexistent/omnitail-test".into()]))).await;
         assert!(matches!(events[..], [SourceEvent::Status(SourceStatus::Error(_))]));
     }
 

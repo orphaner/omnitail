@@ -1,4 +1,4 @@
-# Demo stack for mtr:
+# Demo stack for omnitail:
 #   docker compose -f demo/compose.yml up -d
 #   cargo run -- -c demo/stack.toml
 #   docker compose -f demo/compose.yml down    # when done
@@ -17,7 +17,7 @@ services = ["web"]
 scheme = ["webdemo", "generic"]
 
 # No scheme: each pane guesses its format (http, json, logfmt…). `db`
-# colors its own output, so mtr leaves those lines alone.
+# colors its own output, so omnitail leaves those lines alone.
 [[source]]
 type = "compose"
 file = "compose.yml"

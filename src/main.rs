@@ -99,13 +99,13 @@ fn pane_heights(n: usize) -> Vec<usize> {
     }
 }
 
-/// The TUI owns stdout, so mtr's own logs go to a file.
+/// The TUI owns stdout, so omnitail's own logs go to a file.
 fn init_logging(cli: &cli::Cli) -> Result<()> {
     let file = File::create(&cli.log_file).with_context(|| format!("cannot create {}", cli.log_file.display()))?;
     tracing_subscriber::fmt()
         .with_writer(Mutex::new(file))
         .with_ansi(false)
-        .with_env_filter(EnvFilter::try_from_env("MTR_LOG").unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(EnvFilter::try_from_env("OMNITAIL_LOG").unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
     Ok(())
 }

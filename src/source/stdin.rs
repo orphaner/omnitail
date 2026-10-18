@@ -5,14 +5,14 @@ use tokio::task::JoinHandle;
 
 use super::{Emitter, Source, SourceStatus, decode_line};
 
-/// Follows mtr's own stdin (`cmd | mtr -`). Keys still work: crossterm reads
+/// Follows omnitail's own stdin (`cmd | omnitail -`). Keys still work: crossterm reads
 /// them from /dev/tty when stdin is not a terminal.
 pub struct StdinSource;
 
 impl Source for StdinSource {
     fn spawn(self: Box<Self>, out: Emitter) -> JoinHandle<()> {
         // A plain thread, not tokio's blocking pool: a blocked read must not
-        // keep the runtime (and so mtr) from exiting.
+        // keep the runtime (and so omnitail) from exiting.
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(1024);
         std::thread::spawn(move || {
             let mut reader = BufReader::new(std::io::stdin().lock());

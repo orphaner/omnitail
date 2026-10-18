@@ -139,7 +139,7 @@ struct SchemeFile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Origin {
     Multitail,
-    Mtr,
+    Omnitail,
     Config,
 }
 
@@ -147,7 +147,7 @@ impl Origin {
     pub fn label(self) -> &'static str {
         match self {
             Origin::Multitail => "multitail",
-            Origin::Mtr => "mtr",
+            Origin::Omnitail => "omnitail",
             Origin::Config => "config",
         }
     }
@@ -158,9 +158,9 @@ pub struct SchemeInfo {
     pub description: Option<String>,
 }
 
-/// Every scheme mtr knows: converted from multitail, then mtr's own, then
+/// Every scheme omnitail knows: converted from multitail, then omnitail's own, then
 /// the user's. A later one replaces an earlier one of the same name, except
-/// that a multitail scheme shadowed by one of mtr's stays available as
+/// that a multitail scheme shadowed by one of omnitail's stays available as
 /// `<name>-multitail`.
 pub struct Library {
     schemes: HashMap<String, Slot>,
@@ -182,7 +182,7 @@ impl Slot {
     }
 }
 
-/// mtr's own schemes, in the same format as user config files.
+/// omnitail's own schemes, in the same format as user config files.
 const BUILTIN: &str = include_str!("builtin.toml");
 /// Schemes converted from multitail (scripts/convert-multitail.py).
 const MULTITAIL: &str = include_str!("multitail.toml");
@@ -190,7 +190,7 @@ const MULTITAIL: &str = include_str!("multitail.toml");
 impl Library {
     pub fn new(user: &HashMap<String, SchemeDef>) -> Result<Self, String> {
         let mut lib = Self { schemes: HashMap::new(), info: BTreeMap::new(), paths: Vec::new() };
-        for (text, origin) in [(MULTITAIL, Origin::Multitail), (BUILTIN, Origin::Mtr)] {
+        for (text, origin) in [(MULTITAIL, Origin::Multitail), (BUILTIN, Origin::Omnitail)] {
             let file: SchemeFile = toml::from_str(text).map_err(|e| format!("{} schemes: {e}", origin.label()))?;
             for (name, value) in file.scheme {
                 let def: SchemeDef = value.try_into().map_err(|e| format!("{} scheme `{name}`: {e}", origin.label()))?;
@@ -204,7 +204,7 @@ impl Library {
     }
 
     fn add(&mut self, name: &str, def: &SchemeDef, origin: Origin) -> Result<(), String> {
-        if origin == Origin::Mtr && self.info.get(name).is_some_and(|i| i.origin == Origin::Multitail) {
+        if origin == Origin::Omnitail && self.info.get(name).is_some_and(|i| i.origin == Origin::Multitail) {
             self.rename(name, &format!("{name}-multitail"));
         }
         for path in &def.paths {
@@ -235,7 +235,7 @@ impl Library {
     }
 
     /// The scheme files at `path` get by default, if any: the user's over
-    /// mtr's over multitail's, then the first declared (as in multitail).
+    /// omnitail's over multitail's, then the first declared (as in multitail).
     pub fn for_path(&self, path: &str) -> Option<&str> {
         let matches = self.paths.iter().filter(|(r, _, _)| r.is_match(path));
         let best = matches.fold(None, |best: Option<&(Regex, String, Origin)>, m| match best {
@@ -257,7 +257,7 @@ impl Library {
             .map(|n| {
                 self.schemes
                     .get(n)
-                    .ok_or_else(|| format!("unknown color scheme `{n}` (see mtr --list-schemes)"))?
+                    .ok_or_else(|| format!("unknown color scheme `{n}` (see omnitail --list-schemes)"))?
                     .get(n)
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -355,8 +355,8 @@ mod tests {
                 panic!("{e}");
             }
         }
-        // Shadowed by mtr's own syslog, still reachable.
-        assert_eq!(lib.list().find(|(n, _)| *n == "syslog").unwrap().1.origin, Origin::Mtr);
+        // Shadowed by omnitail's own syslog, still reachable.
+        assert_eq!(lib.list().find(|(n, _)| *n == "syslog").unwrap().1.origin, Origin::Omnitail);
         assert!(lib.resolve(&["syslog-multitail".into()]).is_ok());
         assert!(lib.resolve(&["uucp".into()]).is_err(), "excluded");
 

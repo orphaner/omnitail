@@ -126,7 +126,7 @@ pub struct SourceConfig {
     /// Start the source again when it ends. Default: on for containers,
     /// whose log streams end whenever the container restarts.
     pub restart: Option<bool>,
-    /// Color scheme(s), in priority order; `"none"` turns mtr's coloring
+    /// Color scheme(s), in priority order; `"none"` turns omnitail's coloring
     /// off. Default: guessed from the first lines.
     pub scheme: Option<SchemeRef>,
 }

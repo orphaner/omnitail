@@ -1,4 +1,4 @@
-# mtr
+# omnitail
 
 A modern take on [multitail](https://www.vanheusden.com/multitail/), in Rust: follow several log streams at once, in stacked panes, from files, commands or containers.
 
@@ -8,8 +8,8 @@ A modern take on [multitail](https://www.vanheusden.com/multitail/), in Rust: fo
 cargo run -- [OPTIONS] <SOURCE>...
 
 # examples
-mtr /var/log/system.log app.log
-mtr app.log 'cmd:kubectl logs -f deploy/api' docker:postgres
+omnitail /var/log/system.log app.log
+omnitail app.log 'cmd:kubectl logs -f deploy/api' docker:postgres
 ```
 
 Sources:
@@ -22,17 +22,17 @@ Sources:
 | `compose:` / `compose:web,db` (or `dc:…`) | a compose project, one pane per service |
 | `k8s:deploy/api [kubectl args]` | `kubectl logs --follow`; a label selector (`k8s:app=api`) merges its pods |
 | `journal:` / `journal:nginx` | the systemd journal, or one unit |
-| `-` | mtr's stdin (`make 2>&1 \| mtr - app.log`) |
+| `-` | omnitail's stdin (`make 2>&1 \| omnitail - app.log`) |
 
 Container sources (docker, compose, k8s) restart when their stream ends, resuming where it stopped.
 
-Sources can also be listed in a TOML file, `mtr -c stack.toml`, with per-source `name`, `lines` and `restart`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`.
+Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `lines` and `restart`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`.
 
 ## Colors
 
-mtr colors log lines itself: levels, timestamps, IPs, URLs, UUIDs and durations stand out. Each source's format is guessed from its first lines, then the matching scheme is used: `http` (nginx/apache access logs), `json`, `logfmt` or `syslog`, falling back on `generic`. Lines that already carry their own ANSI colors keep them.
+omnitail colors log lines itself: levels, timestamps, IPs, URLs, UUIDs and durations stand out. Each source's format is guessed from its first lines, then the matching scheme is used: `http` (nginx/apache access logs), `json`, `logfmt` or `syslog`, falling back on `generic`. Lines that already carry their own ANSI colors keep them.
 
-mtr also ships 62 schemes converted from [multitail](https://github.com/folkertvanheusden/multitail) (ssh, postfix, exim, dovecot, fail2ban, apache, squid, bind, mysql, log4j, cisco_ios…): `mtr --list-schemes` lists them all. Files whose path a scheme claims get it automatically (e.g. `/var/log/fail2ban.log` → `f2b`, `/var/log/mail/` → `postfix`).
+omnitail also ships 62 schemes converted from [multitail](https://github.com/folkertvanheusden/multitail) (ssh, postfix, exim, dovecot, fail2ban, apache, squid, bind, mysql, log4j, cisco_ios…): `omnitail --list-schemes` lists them all. Files whose path a scheme claims get it automatically (e.g. `/var/log/fail2ban.log` → `f2b`, `/var/log/mail/` → `postfix`).
 
 In a config file, a source can pick its scheme(s) explicitly (`scheme = "http"`, `scheme = ["mine", "generic"]`, or `scheme = "none"`), and you can define your own:
 
@@ -48,7 +48,7 @@ rules = [
 
 Styles are color names (red, green, yellow, blue, magenta, cyan, white, gray, orange, black), `0`-`255` or `#rrggbb`, plus `bold`, `dim`, `italic`, `underline` and `reverse`, with `fg:` and `bg:` prefixes. Where two rules match the same text, the first one wins. `--no-color` (or `color = false`) starts with coloring off.
 
-Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi` (then mtr colors those lines too), `--no-color`, `--log-file PATH`.
+Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--strip-ansi` (then omnitail colors those lines too), `--no-color`, `--log-file PATH`.
 
 ## Keys
 
@@ -64,7 +64,7 @@ Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by d
 | `/` | highlight a pattern in all panes, live (empty to remove) |
 | `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove) |
 | `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
-| `C` / `c` | mtr's coloring on/off for all panes / one pane |
+| `C` / `c` | omnitail's coloring on/off for all panes / one pane |
 | `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none`, or any scheme) |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
 

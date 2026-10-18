@@ -3,7 +3,7 @@
 
 use ratatui::style::{Color, Modifier, Style};
 
-/// Color names map to fixed 256-palette entries, like the rest of mtr's own
+/// Color names map to fixed 256-palette entries, like the rest of omnitail's own
 /// colors, so they look the same whatever the terminal theme.
 fn named(name: &str) -> Option<Color> {
     let index = match name {

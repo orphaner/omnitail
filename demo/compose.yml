@@ -1,4 +1,4 @@
-name: mtrdemo
+name: omnitaildemo
 services:
   web:
     image: alpine:3

@@ -15,6 +15,7 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
         SelectPurpose::Pause => " Pause/resume ",
         SelectPurpose::Filter => " Filter ",
         SelectPurpose::Scheme => " Color scheme ",
+        SelectPurpose::Level => " Level filter ",
     };
     let max_name = (area.width as usize).saturating_sub(8);
     let items: Vec<String> = panes

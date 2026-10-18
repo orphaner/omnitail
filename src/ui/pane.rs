@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 
 use super::text::Render;
 use crate::app::Pane;
-use crate::buffer::{Buffer, Seq};
+use crate::buffer::{Buffer, Entry, Seq};
 use crate::pattern::Pattern;
 
 fn split(area: Rect) -> [Rect; 2] {
@@ -30,7 +30,8 @@ pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, opts: &P
     if hidden > 0 {
         count.push_str(&format!(" ({hidden} hidden)"));
     }
-    let filter = pane.filter.as_ref().map(|f| format!("filter: {} · ", f.text)).unwrap_or_default();
+    let level = pane.level.map(|l| format!("≥{l} · ")).unwrap_or_default();
+    let filter = format!("{level}{}", pane.filter.as_ref().map(|f| format!("filter: {} · ", f.text)).unwrap_or_default());
     let right = [
         format!("{filter}{}{count}", super::color_label(pane)),
         format!("{filter}{count}"),
@@ -47,11 +48,11 @@ pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, opts: &P
     };
     let start = pane.buffer.view_start();
     let end = pane.view_end().max(start);
-    let rows = tail_rows(&pane.buffer, start, end, body.height as usize, &render, pane.filter.as_ref());
+    let rows = tail_rows(&pane.buffer, start, end, body.height as usize, &render, |e| pane.shows(e));
     frame.render_widget(Paragraph::new(rows), body);
 }
 
-/// The last `height` rows of lines `start..end` that pass `filter`,
+/// The last `height` rows of lines `start..end` that pass `shows`,
 /// bottom-anchored like a terminal: the newest line is on the last row.
 fn tail_rows(
     buffer: &Buffer,
@@ -59,18 +60,18 @@ fn tail_rows(
     end: Seq,
     height: usize,
     render: &Render,
-    filter: Option<&Pattern>,
+    shows: impl Fn(&Entry) -> bool,
 ) -> Vec<Line<'static>> {
     let mut chunks = Vec::new();
     let mut count = 0;
     let mut seq = end;
     while seq > start && count < height {
         seq -= 1;
-        let line = buffer.get(seq).unwrap_or_default();
-        if filter.is_some_and(|f| !f.accepts(line)) {
+        let Some(entry) = buffer.entry(seq) else { continue };
+        if !shows(entry) {
             continue;
         }
-        let rows = render.rows(line);
+        let rows = render.rows(&entry.text);
         count += rows.len();
         chunks.push(rows);
     }
@@ -94,10 +95,12 @@ mod tests {
             b.push(l.into());
         }
         let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None };
-        assert_eq!(plain(tail_rows(&b, 0, 3, 2, &render, None)), ["def", "z"]);
-        assert_eq!(plain(tail_rows(&b, 2, 3, 5, &render, None)), ["z"], "lines before start (cleared) are hidden");
-        assert_eq!(plain(tail_rows(&b, 0, 2, 5, &render, None)), ["one", "abc", "def"], "lines from end on (paused) too");
+        let all = |_: &Entry| true;
+        assert_eq!(plain(tail_rows(&b, 0, 3, 2, &render, all)), ["def", "z"]);
+        assert_eq!(plain(tail_rows(&b, 2, 3, 5, &render, all)), ["z"], "lines before start (cleared) are hidden");
+        assert_eq!(plain(tail_rows(&b, 0, 2, 5, &render, all)), ["one", "abc", "def"], "lines from end on (paused) too");
         let not_z = Pattern::parse("!z", true).unwrap();
-        assert_eq!(plain(tail_rows(&b, 0, 3, 5, &render, Some(&not_z))), ["one", "abc", "def"], "filtered out");
+        let shows = |e: &Entry| not_z.accepts(&e.text);
+        assert_eq!(plain(tail_rows(&b, 0, 3, 5, &render, shows)), ["one", "abc", "def"], "filtered out");
     }
 }

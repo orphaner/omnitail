@@ -346,6 +346,31 @@ mod tests {
     }
 
     #[test]
+    fn builtin_looks() {
+        let lib = Library::new(&HashMap::new()).unwrap();
+        let style_of = |scheme: &str, line: &str, part: &str| {
+            let at = line.find(part).unwrap();
+            let spans = lib.resolve(&[scheme.into()]).unwrap().spans(line);
+            spans.into_iter().find(|(r, _)| r.contains(&at)).map(|(r, s)| (line[r].to_string(), s))
+        };
+        let http = r#"10.0.0.1 - - [18/Oct/2026:14:25:25 +0000] "GET /api/items?x=1 HTTP/1.1" 500 1 "-" "curl""#;
+        let (text, badge) = style_of("http", http, "GET").unwrap();
+        assert_eq!((text.as_str(), badge.bg), ("GET", Some(Color::Indexed(114))), "method badge");
+        assert_eq!(style_of("http", http, "/api").unwrap().0, "/api/items", "path, query apart");
+
+        let json = r#"{"level":"error","msg":"boom","n":1}"#;
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        assert_eq!(style_of("json", json, "boom"), Some(("boom".into(), bold)), "message stands out");
+        assert_eq!(style_of("json", json, "msg").unwrap().1.fg, Some(Color::Indexed(245)), "keys step back");
+        assert_eq!(style_of("json", json, "{").unwrap().1.fg, Some(Color::Indexed(240)), "punctuation too");
+        assert_eq!(style_of("json", json, "error").unwrap().1.fg, Some(Color::Indexed(203)), "level word kept");
+
+        let logfmt = r#"time=x level=warn msg="job processed" job=1"#;
+        assert_eq!(style_of("logfmt", logfmt, "\"job").unwrap(), ("\"job processed\"".to_string(), bold));
+        assert_eq!(style_of("logfmt", logfmt, "=").unwrap().1.fg, Some(Color::Indexed(240)));
+    }
+
+    #[test]
     fn multitail_schemes_all_compile_with_paths() {
         let lib = Library::new(&HashMap::new()).unwrap();
         let from_multitail: Vec<&str> = lib.list().filter(|(_, i)| i.origin == Origin::Multitail).map(|(n, _)| n).collect();

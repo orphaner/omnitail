@@ -35,6 +35,9 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
     if let Some(s) = &sb.search {
         details.push(if s.total > 0 { format!("match {}/{}", s.rank, s.total) } else { format!("/{}", s.pattern.text) });
     }
+    if let Some(l) = sb.level {
+        details.push(format!("≥{l}"));
+    }
     if let Some(f) = &sb.filter {
         details.push(format!("filter: {}", f.text));
     }

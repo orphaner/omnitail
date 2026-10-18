@@ -129,6 +129,8 @@ pub struct SourceConfig {
     /// Color scheme(s), in priority order; `"none"` turns omnitail's coloring
     /// off. Default: guessed from the first lines.
     pub scheme: Option<SchemeRef>,
+    /// Show only lines of this level and up (`L`/`l` change it).
+    pub level: Option<crate::level::Level>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -163,7 +165,7 @@ impl SourceConfig {
 
 impl From<SourceSpec> for SourceConfig {
     fn from(spec: SourceSpec) -> Self {
-        Self { spec, name: None, lines: None, restart: None, scheme: None }
+        Self { spec, name: None, lines: None, restart: None, scheme: None, level: None }
     }
 }
 

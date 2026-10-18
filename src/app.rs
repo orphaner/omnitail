@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 
 use crate::buffer::{Buffer, Entry, Seq};
 use crate::color::{Choice, FALLBACK, Library, PaneColor, Scheme};
+use crate::level::Level;
 use crate::pattern::Pattern;
 use crate::source::{SourceEvent, SourceId, SourceStatus};
 use crate::view::{HistoryView, Merged, Pos, Target};
@@ -30,12 +31,19 @@ pub struct Pane {
     pub paused: Option<Seq>,
     /// Lines the pane shows (`E`/`e`); the history keeps everything.
     pub filter: Option<Pattern>,
+    /// Lowest level shown (`L`/`l`); lines with no known level always are.
+    pub level: Option<Level>,
 }
 
 impl Pane {
     /// One past the last line the pane shows.
     pub fn view_end(&self) -> Seq {
         self.paused.unwrap_or(self.buffer.end_seq()).min(self.buffer.end_seq())
+    }
+
+    /// Whether the pane shows `entry`, given its filter and level.
+    pub fn shows(&self, entry: &Entry) -> bool {
+        Level::passes(entry.level, self.level) && self.filter.as_ref().is_none_or(|f| f.accepts(&entry.text))
     }
 
     fn toggle_pause(&mut self) {
@@ -54,6 +62,7 @@ pub enum SelectPurpose {
     Pause,
     Filter,
     Scheme,
+    Level,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +113,8 @@ pub struct Scrollback {
     pub search: Option<Search>,
     /// While paused (`p`), the view ends at this position.
     pub paused: Option<Pos>,
+    /// Lowest level shown (`l`).
+    pub level: Option<Level>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,17 +127,17 @@ pub struct Search {
 }
 
 impl Scrollback {
-    fn new(target: Target, filter: Option<Pattern>) -> Self {
-        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None }
+    fn new(target: Target, filter: Option<Pattern>, level: Option<Level>) -> Self {
+        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None, level }
     }
 
     #[cfg(test)]
     pub fn for_test() -> Self {
-        Self::new(Target::Pane(0), None)
+        Self::new(Target::Pane(0), None, None)
     }
 
     pub fn view<'a>(&'a self, panes: &'a [Pane]) -> HistoryView<'a> {
-        HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused)
+        HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused).level(self.level)
     }
 
     /// Lines that arrived since the view was paused.
@@ -246,6 +257,7 @@ impl App {
                 buffer: Buffer::new(history),
                 paused: None,
                 filter: None,
+                level: None,
             })
             .collect();
         Self {
@@ -288,7 +300,15 @@ impl App {
             SourceEvent::Line(text) => {
                 pane.color.observe(&text, &self.library);
                 let seq = pane.buffer.end_seq();
-                pane.buffer.push_entry(Entry { text, arrival: self.arrival, at: Local::now() });
+                let stated = if text.contains('\x1b') {
+                    crate::level::detect(&crate::ui::plain_text(&text))
+                } else {
+                    crate::level::detect(&text)
+                };
+                // A line without a level (a stack trace, a wrapped message)
+                // belongs with the line before it.
+                let level = stated.or_else(|| seq.checked_sub(1).and_then(|s| pane.buffer.entry(s)).and_then(|e| e.level));
+                pane.buffer.push_entry(Entry { text, arrival: self.arrival, at: Local::now(), level });
                 self.arrival += 1;
                 // An open merged view follows arrivals as they come.
                 let merged = match &mut self.mode {
@@ -428,7 +448,14 @@ impl App {
             KeyCode::Char('n') => self.select(SelectPurpose::Clear),
             KeyCode::Char('b') => self.select(SelectPurpose::Scrollback),
             KeyCode::Char('B') => {
-                self.mode = Mode::Scrollback(Scrollback::new(Target::Merged(Merged::build(&self.panes)), None))
+                let target = Target::Merged(Merged::build(&self.panes));
+                self.mode = Mode::Scrollback(Scrollback::new(target, None, self.shared_level()))
+            }
+            KeyCode::Char('l') => self.select(SelectPurpose::Level),
+            KeyCode::Char('L') => {
+                let level = Level::cycle(self.shared_level());
+                self.panes.iter_mut().for_each(|p| p.level = level);
+                self.notice = Some(format!("all panes: {}", level_notice(level)));
             }
             KeyCode::Char('c') => self.select(SelectPurpose::Color),
             KeyCode::Char('C') => {
@@ -512,6 +539,11 @@ impl App {
                 sb.hscroll = 0;
             }
             KeyCode::Char('t') => self.times = !self.times,
+            KeyCode::Char('l') => {
+                sb.level = Level::cycle(sb.level);
+                sb.search = None;
+                self.notice = Some(level_notice(sb.level));
+            }
             KeyCode::Char('p') => {
                 sb.paused = match sb.paused {
                     Some(_) => None,
@@ -720,6 +752,12 @@ impl App {
         self.clipboard = text;
     }
 
+    /// The level filter all panes have, if they share one.
+    fn shared_level(&self) -> Option<Level> {
+        let first = self.panes.first().and_then(|p| p.level);
+        first.filter(|_| self.panes.iter().all(|p| p.level == first))
+    }
+
     /// Opens the pane picker, or applies right away when there is no choice.
     fn select(&mut self, purpose: SelectPurpose) {
         if self.panes.len() == 1 {
@@ -734,8 +772,13 @@ impl App {
         match purpose {
             SelectPurpose::Clear => self.panes[pane].buffer.clear_view(Local::now(), "cleared"),
             SelectPurpose::Scrollback => {
-                let filter = self.panes[pane].filter.clone();
-                self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(pane), filter));
+                let p = &self.panes[pane];
+                self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(pane), p.filter.clone(), p.level));
+            }
+            SelectPurpose::Level => {
+                let level = Level::cycle(self.panes[pane].level);
+                self.panes[pane].level = level;
+                self.notice = Some(format!("pane {}: {}", pane + 1, level_notice(level)));
             }
             SelectPurpose::Pause => self.panes[pane].toggle_pause(),
             SelectPurpose::Color => {
@@ -753,6 +796,15 @@ impl App {
                 self.mode = Mode::Schemes(SchemePicker { pane, query: String::new(), selected });
             }
         }
+    }
+}
+
+/// What the key bar says after `l`/`L`.
+fn level_notice(level: Option<Level>) -> String {
+    match level {
+        None => "all levels".into(),
+        Some(Level::Error) => "errors only (and lines with no level)".into(),
+        Some(l) => format!("{l} and up (and lines with no level)"),
     }
 }
 
@@ -1111,6 +1163,59 @@ mod tests {
         press(&mut a, KeyCode::Char('P'));
         assert!(a.panes.iter().all(|p| p.paused.is_none()), "all paused: P resumes all");
         assert_eq!(a.panes[0].view_end(), 6);
+    }
+
+    #[test]
+    fn levels_are_read_and_inherited() {
+        let mut a = App::with_names(&["java"]);
+        for line in [
+            "starting",
+            "2026-10-18 10:00:00 INFO ready",
+            "2026-10-18 10:00:01 ERROR boom",
+            "\tat com.foo.Bar(Bar.java:1)",
+            "\x1b[33m2026-10-18 10:00:02 WARN\x1b[0m slow",
+        ] {
+            a.ingest(0, SourceEvent::Line(line.into()));
+        }
+        let levels: Vec<_> = a.panes[0].buffer.entries().map(|(_, e)| e.level).collect();
+        use Level::*;
+        assert_eq!(levels, [None, Some(Info), Some(Error), Some(Error), Some(Warn)], "trace follows its error; ANSI ignored");
+    }
+
+    #[test]
+    fn level_filter_keys() {
+        let mut a = app(2);
+        a.ingest(0, SourceEvent::Line("ERROR bad".into()));
+        a.ingest(0, SourceEvent::Line("INFO fine".into()));
+        press(&mut a, KeyCode::Char('l'));
+        assert!(matches!(a.mode, Mode::Select { purpose: SelectPurpose::Level, .. }));
+        press(&mut a, KeyCode::Char('1'));
+        assert_eq!((a.panes[0].level, a.panes[1].level), (Some(Level::Debug), None));
+
+        press(&mut a, KeyCode::Char('L'));
+        assert!(a.panes.iter().all(|p| p.level == Some(Level::Debug)), "not shared: L starts the cycle for all");
+        for _ in 0..3 {
+            press(&mut a, KeyCode::Char('L'));
+        }
+        assert!(a.panes.iter().all(|p| p.level == Some(Level::Error)));
+        let shown: Vec<_> = a.panes[0].buffer.entries().filter(|(_, e)| a.panes[0].shows(e)).map(|(_, e)| e.text.clone()).collect();
+        assert_eq!(&shown[5..], ["ERROR bad"], "info hidden, lines with no level kept: {shown:?}");
+
+        // A pane's history starts with its level, and l changes it for the view only.
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('1'));
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert_eq!(sb.level, Some(Level::Error));
+        assert_eq!(sb.view(&a.panes).count(&Pattern::parse("fine", false).unwrap(), 99), (0, 0), "hidden by the level");
+        press(&mut a, KeyCode::Char('l'));
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert_eq!(sb.level, None);
+        assert_eq!(sb.view(&a.panes).count(&Pattern::parse("fine", false).unwrap(), 99), (1, 1));
+        assert_eq!(a.panes[0].level, Some(Level::Error), "the pane keeps its own");
+
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Char('L'));
+        assert!(a.panes.iter().all(|p| p.level.is_none()), "after error: all levels again");
     }
 
     #[test]

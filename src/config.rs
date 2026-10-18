@@ -74,6 +74,8 @@ pub struct Settings {
     pub lines: Option<usize>,
     pub color: bool,
     pub schemes: HashMap<String, SchemeDef>,
+    /// Level filter for every pane, over each source's own.
+    pub level: Option<crate::level::Level>,
 }
 
 impl Settings {
@@ -98,6 +100,7 @@ impl Settings {
             lines: cli.lines,
             color: !cli.no_color && file.color.unwrap_or(true),
             schemes: file.scheme,
+            level: cli.level,
         })
     }
 }
@@ -126,6 +129,7 @@ mod tests {
             path = "app.log"
             name = "app"
             lines = 5
+            level = "WARNING"
             [[source]]
             type = "compose"
             file = "/abs/compose.yml"
@@ -142,6 +146,7 @@ mod tests {
         let [app, compose, k8s] = &config.sources[..] else { panic!("{config:?}") };
         assert_eq!(app.spec, SourceSpec::File { path: dir.path().join("app.log") });
         assert_eq!((app.title(), app.lines), ("app".into(), Some(5)));
+        assert_eq!((app.level, compose.level), (Some(crate::level::Level::Warn), None));
         assert_eq!(
             compose.spec,
             SourceSpec::Compose { services: vec!["web".into()], file: Some("/abs/compose.yml".into()) }

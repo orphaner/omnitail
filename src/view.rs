@@ -6,6 +6,7 @@ use std::collections::VecDeque;
 
 use crate::app::Pane;
 use crate::buffer::{ClearMark, Entry, Seq};
+use crate::level::Level;
 use crate::pattern::Pattern;
 
 /// A position in a view: a sequence number for one pane, an index in the
@@ -64,16 +65,23 @@ pub struct HistoryView<'a> {
     filter: Option<&'a Pattern>,
     /// Paused views end here, whatever arrived since.
     until: Option<Pos>,
+    /// Lowest level shown; lines with no known level always are.
+    level: Option<Level>,
 }
 
 impl<'a> HistoryView<'a> {
     pub fn new(panes: &'a [Pane], target: &'a Target, filter: Option<&'a Pattern>) -> Self {
-        Self { panes, target, filter, until: None }
+        Self { panes, target, filter, until: None, level: None }
     }
 
     /// The same view, ending at `until` when set (a paused view).
     pub fn until(self, until: Option<Pos>) -> Self {
         Self { until, ..self }
+    }
+
+    /// The same view, showing only lines of `level` and up when set.
+    pub fn level(self, level: Option<Level>) -> Self {
+        Self { level, ..self }
     }
 
     pub fn is_merged(&self) -> bool {
@@ -110,9 +118,11 @@ impl<'a> HistoryView<'a> {
         Some(ViewLine { pane, seq, entry })
     }
 
-    /// The line at `pos` if the filter lets it through.
+    /// The line at `pos` if the filter and the level let it through.
     pub fn visible(&self, pos: Pos) -> Option<ViewLine<'a>> {
-        self.line(pos).filter(|l| self.filter.is_none_or(|f| f.accepts(&l.entry.text)))
+        self.line(pos).filter(|l| {
+            Level::passes(l.entry.level, self.level) && self.filter.is_none_or(|f| f.accepts(&l.entry.text))
+        })
     }
 
     /// Clear marks just before `pos` (single-pane views only).

@@ -26,6 +26,11 @@ pub struct Cli {
     #[arg(short = 'n', long, value_name = "N")]
     pub lines: Option<usize>,
 
+    /// Show only lines of this level and up, in every pane (trace, debug,
+    /// info, warn, error; change it with L/l). Lines with no level stay.
+    #[arg(long, value_name = "LEVEL")]
+    pub level: Option<crate::level::Level>,
+
     /// Strip ANSI colors instead of rendering them.
     #[arg(long)]
     pub strip_ansi: bool,
@@ -53,6 +58,9 @@ mod tests {
         assert_eq!(cli.lines, Some(50));
         assert_eq!(cli.sources.len(), 3);
         assert_eq!(cli.sources[1], SourceSpec::Cmd { command: "ping x".into() });
+        let cli = Cli::try_parse_from(["omnitail", "--level", "warn", "a.log"]).unwrap();
+        assert_eq!(cli.level, Some(crate::level::Level::Warn));
+        assert!(Cli::try_parse_from(["omnitail", "--level", "loud", "a.log"]).is_err());
     }
 
     #[test]

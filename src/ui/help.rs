@@ -22,6 +22,7 @@ pub const PANES: Section = Section {
         ("B", "all panes merged, in arrival order"),
         ("/", "highlight a pattern everywhere"),
         ("E e", "filter all panes / one pane"),
+        ("L l", "levels shown: all panes / one pane"),
         ("N n", "clear all panes / one pane"),
         ("P p", "pause all panes / one pane"),
         ("C c", "colors on/off: all / one pane"),
@@ -42,6 +43,7 @@ pub const HISTORY: Section = Section {
         ("/ ?", "search down / up"),
         ("n N", "next match / previous one"),
         ("&", "show matching lines only"),
+        ("l", "levels shown in this view"),
         ("Enter", "line detail, JSON pretty-printed"),
         ("y", "copy the line"),
         ("p", "pause the view"),
@@ -65,7 +67,7 @@ pub const DETAIL: Section = Section {
 };
 
 pub const PICKER: Section = Section {
-    title: "Choosing a pane (popup of b n e p c s)",
+    title: "Choosing a pane (popup of b n e l p c s)",
     keys: &[("1-9", "that pane"), ("↑ ↓ Enter", "move, then choose"), ("Esc", "cancel")],
 };
 

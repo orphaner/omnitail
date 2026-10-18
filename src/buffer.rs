@@ -9,6 +9,8 @@ use std::collections::VecDeque;
 
 use chrono::{DateTime, Local};
 
+use crate::level::Level;
+
 pub type Seq = u64;
 
 /// One line and when it arrived.
@@ -18,6 +20,9 @@ pub struct Entry {
     /// Global arrival rank across all sources, to merge them in order.
     pub arrival: u64,
     pub at: DateTime<Local>,
+    /// Severity, read from the line or inherited from the previous one
+    /// (stack traces follow their error); `None` when nothing said.
+    pub level: Option<Level>,
 }
 
 pub struct Buffer {
@@ -53,7 +58,7 @@ impl Buffer {
     #[cfg(test)]
     pub fn push(&mut self, line: String) {
         let arrival = self.next_seq;
-        self.push_entry(Entry { text: line, arrival, at: Local::now() });
+        self.push_entry(Entry { text: line, arrival, at: Local::now(), level: None });
     }
 
     pub fn push_entry(&mut self, entry: Entry) {

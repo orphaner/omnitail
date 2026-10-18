@@ -3,6 +3,7 @@ mod buffer;
 mod cli;
 mod color;
 mod config;
+mod level;
 mod pattern;
 mod source;
 mod spec;
@@ -56,6 +57,9 @@ async fn main() -> Result<()> {
     drop(tx);
 
     let mut app = App::new(panes, library, settings.history, settings.strip_ansi);
+    for (pane, config) in app.panes.iter_mut().zip(&sources) {
+        pane.level = settings.level.or(config.level);
+    }
     // `init` also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     let result = app::run(&mut terminal, &mut app, rx).await;

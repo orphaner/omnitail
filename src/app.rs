@@ -455,7 +455,6 @@ impl App {
             KeyCode::Char('L') => {
                 let level = Level::cycle(self.shared_level());
                 self.panes.iter_mut().for_each(|p| p.level = level);
-                self.notice = Some(format!("all panes: {}", level_notice(level)));
             }
             KeyCode::Char('c') => self.select(SelectPurpose::Color),
             KeyCode::Char('C') => {
@@ -542,7 +541,6 @@ impl App {
             KeyCode::Char('l') => {
                 sb.level = Level::cycle(sb.level);
                 sb.search = None;
-                self.notice = Some(level_notice(sb.level));
             }
             KeyCode::Char('p') => {
                 sb.paused = match sb.paused {
@@ -775,11 +773,7 @@ impl App {
                 let p = &self.panes[pane];
                 self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(pane), p.filter.clone(), p.level));
             }
-            SelectPurpose::Level => {
-                let level = Level::cycle(self.panes[pane].level);
-                self.panes[pane].level = level;
-                self.notice = Some(format!("pane {}: {}", pane + 1, level_notice(level)));
-            }
+            SelectPurpose::Level => self.panes[pane].level = Level::cycle(self.panes[pane].level),
             SelectPurpose::Pause => self.panes[pane].toggle_pause(),
             SelectPurpose::Color => {
                 let color = &mut self.panes[pane].color;
@@ -796,15 +790,6 @@ impl App {
                 self.mode = Mode::Schemes(SchemePicker { pane, query: String::new(), selected });
             }
         }
-    }
-}
-
-/// What the key bar says after `l`/`L`.
-fn level_notice(level: Option<Level>) -> String {
-    match level {
-        None => "all levels".into(),
-        Some(Level::Error) => "errors only (and lines with no level)".into(),
-        Some(l) => format!("{l} and up (and lines with no level)"),
     }
 }
 

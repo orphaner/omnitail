@@ -31,7 +31,8 @@ pub const PANES: Section = Section {
         ("Enter", "split a k8s pane: pods, then containers"),
         ("Backspace", "back to the screen before the split"),
         ("h F1", "this help"),
-        ("q Esc", "quit"),
+        ("q", "quit"),
+        ("Esc", "back to the first screen, or quit"),
         ("Ctrl+C", "quit, from anywhere"),
     ],
 };

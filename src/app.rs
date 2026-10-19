@@ -347,6 +347,8 @@ pub struct App {
     /// Screens left by splitting a pane (`Enter`), restored by `Backspace`.
     /// Their panes keep receiving lines.
     pub stack: Vec<Vec<Pane>>,
+    /// Depth of `stack` on the first screen, where `Esc` goes back to.
+    home_depth: usize,
     /// Badge colors given so far, by pod and by container name: each keeps
     /// its color everywhere.
     pod_colors: HashMap<Arc<str>, usize>,
@@ -366,6 +368,7 @@ impl App {
             panes,
             feeds,
             stack: Vec::new(),
+            home_depth: 0,
             mode: Mode::Panes,
             strip_ansi,
             wrap: true,
@@ -621,6 +624,26 @@ impl App {
         } else {
             self.start_solo();
         }
+        self.home_depth = self.stack.len();
+    }
+
+    /// Back to the first screen (`Esc`); quits from there.
+    fn home(&mut self) {
+        if self.stack.len() == self.home_depth {
+            self.quit = true;
+        } else if self.stack.len() > self.home_depth {
+            self.panes = self.stack.swap_remove(self.home_depth);
+            self.stack.truncate(self.home_depth);
+        } else {
+            // Gone up past the first screen: split down to it again.
+            while self.stack.len() < self.home_depth && self.panes.len() == 1 {
+                let before = self.stack.len();
+                self.split(0);
+                if self.stack.len() == before {
+                    break;
+                }
+            }
+        }
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
@@ -732,7 +755,8 @@ impl App {
 
     fn panes_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => self.quit = true,
+            KeyCode::Char('q') => self.quit = true,
+            KeyCode::Esc => self.home(),
             KeyCode::Char('N') => {
                 let now = Local::now();
                 self.panes.iter_mut().for_each(|p| p.buffer.clear_view(now, "cleared"));
@@ -1485,6 +1509,16 @@ mod tests {
         assert_eq!(a.panes[0].buffer.len(), 11);
         press(&mut a, KeyCode::Backspace);
         assert!(a.notice.as_ref().unwrap().starts_with("not split"));
+
+        press(&mut a, KeyCode::Esc);
+        assert_eq!(a.panes.len(), 3, "Esc: back down to the first screen");
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Esc);
+        assert!(a.panes[0].name.ends_with("shop-1-aaaaa") && a.panes.len() == 3 && !a.quit, "Esc: back up to it");
+        assert_eq!(a.stack.len(), 1);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.quit, "Esc quits from the first screen");
     }
 
     #[test]

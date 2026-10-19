@@ -76,7 +76,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | Key | Action |
 |---|---|
 | `h` / `F1` | keys of the current view (`Tab`: all keys, `Esc` closes it) |
-| `q` / `Esc` | quit (or go back from a popup or the scrollback) |
+| `q` / `Esc` | quit (or go back from a popup or the scrollback; `Esc` after splitting panes goes back to the first screen) |
 | `Ctrl+C` | quit from anywhere |
 | `N` | clear all panes (the history is kept) |
 | `n` | choose one pane to clear |
@@ -89,7 +89,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `C` / `c` | omnitail's coloring on/off for all panes / one pane |
 | `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none`, or any scheme) |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
-| `Enter` / `Backspace` | split a k8s pane into its pods, then a pod into its containers / back up |
+| `Enter` / `Backspace` | split a k8s pane into its pods, then a pod into its containers / back up one level (`Esc`: back to the first screen) |
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
 

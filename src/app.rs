@@ -11,7 +11,9 @@ use futures::StreamExt;
 use ratatui::DefaultTerminal;
 use tokio::sync::mpsc;
 
-use crate::buffer::{Buffer, Entry, Seq};
+use std::collections::HashMap;
+
+use crate::buffer::{Buffer, Entry, Origin, Seq};
 use crate::color::{Choice, FALLBACK, Library, PaneColor, Scheme};
 use crate::level::Level;
 use crate::pattern::Pattern;
@@ -33,6 +35,9 @@ pub struct Pane {
     pub filter: Option<Pattern>,
     /// Lowest level shown (`L`/`l`); lines with no known level always are.
     pub level: Option<Level>,
+    /// Lines start with their pod (`[pod/name/container] `), turned into
+    /// a badge.
+    pub pod_prefix: bool,
 }
 
 impl Pane {
@@ -43,7 +48,7 @@ impl Pane {
 
     /// Whether the pane shows `entry`, given its filter and level.
     pub fn shows(&self, entry: &Entry) -> bool {
-        Level::passes(entry.level, self.level) && self.filter.as_ref().is_none_or(|f| f.accepts(&entry.text))
+        Level::passes(entry.level, self.level) && self.filter.as_ref().is_none_or(|f| f.accepts_entry(entry))
     }
 
     fn toggle_pause(&mut self) {
@@ -242,6 +247,8 @@ pub struct App {
     pub clipboard: Option<String>,
     /// Arrival rank of the next line, across all sources.
     arrival: u64,
+    /// Badges given so far, by pod name: a pod keeps its color everywhere.
+    origins: HashMap<String, Origin>,
     library: Arc<Library>,
 }
 
@@ -262,6 +269,7 @@ impl App {
                 paused: None,
                 filter: None,
                 level: None,
+                pod_prefix: false,
             })
             .collect();
         Self {
@@ -279,6 +287,7 @@ impl App {
             notice: None,
             clipboard: None,
             arrival: 0,
+            origins: HashMap::new(),
             library,
         }
     }
@@ -310,7 +319,16 @@ impl App {
     pub fn ingest(&mut self, id: SourceId, event: SourceEvent) {
         let Some(pane) = self.panes.get_mut(id) else { return };
         match event {
-            SourceEvent::Line(text) => {
+            SourceEvent::Line(mut text) => {
+                let mut origin = None;
+                if pane.pod_prefix
+                    && let Some((pod, rest)) = split_pod_prefix(&text)
+                {
+                    let count = self.origins.len();
+                    let badge = self.origins.entry(pod.to_owned()).or_insert_with(|| Origin { name: pod_badge(pod).into(), color: count });
+                    origin = Some(badge.clone());
+                    text = rest.to_owned();
+                }
                 pane.color.observe(&text, &self.library);
                 let seq = pane.buffer.end_seq();
                 let stated = if text.contains('\x1b') {
@@ -321,7 +339,7 @@ impl App {
                 // A line without a level (a stack trace, a wrapped message)
                 // belongs with the line before it.
                 let level = stated.or_else(|| seq.checked_sub(1).and_then(|s| pane.buffer.entry(s)).and_then(|e| e.level));
-                pane.buffer.push_entry(Entry { text, arrival: self.arrival, at: Local::now(), level });
+                pane.buffer.push_entry(Entry { text, arrival: self.arrival, at: Local::now(), level, origin });
                 self.arrival += 1;
                 // An open merged view follows arrivals as they come.
                 let merged = match &mut self.mode {
@@ -827,6 +845,23 @@ impl App {
     }
 }
 
+/// The pod and the line of `kubectl logs --prefix` output
+/// (`[pod/api-7f9c8d6b5-xk2p9/app] message`).
+fn split_pod_prefix(line: &str) -> Option<(&str, &str)> {
+    let (inner, text) = line.strip_prefix("[pod/")?.split_once(']')?;
+    let (pod, _container) = inner.split_once('/')?;
+    Some((pod, text.strip_prefix(' ').unwrap_or(text)))
+}
+
+/// A pod's badge: the random suffix of a replica (`api-7f9c8d6b5-xk2p9` →
+/// `xk2p9`), otherwise the whole name (`db-0`).
+fn pod_badge(pod: &str) -> &str {
+    match pod.rsplit_once('-') {
+        Some((_, suffix)) if suffix.len() == 5 && suffix.bytes().all(|b| b.is_ascii_alphanumeric()) => suffix,
+        _ => pod,
+    }
+}
+
 /// Upper bound of source events applied between two frames, so a flood
 /// cannot starve keyboard input.
 const MAX_BATCH: usize = 4096;
@@ -1099,6 +1134,32 @@ mod tests {
         press(&mut a, KeyCode::Char('B'));
         press(&mut a, KeyCode::Char('s'));
         assert!(matches!(a.mode, Mode::Scrollback(_)), "not in the merged view");
+    }
+
+    #[test]
+    fn pod_prefixes_become_badges() {
+        assert_eq!(split_pod_prefix("[pod/api-7f9c8d6b5-xk2p9/app] hello"), Some(("api-7f9c8d6b5-xk2p9", "hello")));
+        assert_eq!(split_pod_prefix("[pod/db-0/db] "), Some(("db-0", "")));
+        assert_eq!(split_pod_prefix("[INFO] hello"), None);
+        assert_eq!((pod_badge("api-7f9c8d6b5-xk2p9"), pod_badge("db-0"), pod_badge("debug")), ("xk2p9", "db-0", "debug"));
+
+        let mut a = App::with_names(&["shop · app", "shop · proxy"]);
+        a.panes.iter_mut().for_each(|p| p.pod_prefix = true);
+        a.ingest(0, line(r#"[pod/shop-5d8-aaaaa/app] {"level":"error","msg":"boom"}"#));
+        a.ingest(0, line("[pod/shop-5d8-bbbbb/app] fine"));
+        a.ingest(1, line("[pod/shop-5d8-bbbbb/proxy] GET /"));
+        let entry = |pane: usize, seq| a.panes[pane].buffer.entry(seq).unwrap().clone();
+        let (first, second, proxy) = (entry(0, 0), entry(0, 1), entry(1, 0));
+        assert_eq!(first.text, r#"{"level":"error","msg":"boom"}"#, "the line itself, for formats and levels");
+        assert_eq!(first.level, Some(Level::Error));
+        assert_eq!(first.origin.as_ref().map(|o| &*o.name), Some("aaaaa"));
+        assert_ne!(first.origin.as_ref().unwrap().color, second.origin.as_ref().unwrap().color);
+        assert_eq!(second.origin, proxy.origin, "a pod keeps its badge across panes");
+
+        a.panes[0].filter = Some(Pattern::parse("bbbbb", true).unwrap());
+        assert!(!a.panes[0].shows(&first) && a.panes[0].shows(&second), "e filters on the badge");
+        a.panes[0].filter = Some(Pattern::parse("!bbbbb", true).unwrap());
+        assert!(a.panes[0].shows(&first) && !a.panes[0].shows(&second));
     }
 
     #[test]

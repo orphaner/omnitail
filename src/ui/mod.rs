@@ -36,6 +36,40 @@ const BAD: Color = Color::Indexed(203); // #ff5f5f
 const MUTED: Color = Color::Indexed(247); // #9e9e9e
 const CURSOR_BG: Color = Color::Indexed(238); // #444444, scrollback cursor line
 const BLACK: Color = Color::Indexed(16); // #000000
+/// Badge colors of panes in the merged view and of pods (fixed palette, dark text).
+const BADGE_COLORS: [u8; 8] = [75, 114, 221, 176, 80, 215, 203, 147];
+
+/// A colored badge on dark text, then a space.
+fn badge(text: String, color: usize) -> [Span<'static>; 2] {
+    let bg = Color::Indexed(BADGE_COLORS[color % BADGE_COLORS.len()]);
+    [Span::styled(text, Style::new().fg(BLACK).bg(bg)), Span::raw(" ")]
+}
+
+/// The badge of the pod a line comes from, if it says.
+fn origin_badge(entry: &crate::buffer::Entry) -> Vec<Span<'static>> {
+    entry.origin.iter().flat_map(|o| badge(format!(" {} ", o.name), o.color)).collect()
+}
+
+/// Rows of `text` behind `prefix` (badges, arrival time): the text gets the
+/// remaining width, and its continuation rows are indented under it.
+fn prefixed_rows(render: &text::Render, text: &str, prefix: Vec<Span<'static>>) -> Vec<Line<'static>> {
+    if prefix.is_empty() {
+        return render.rows(text);
+    }
+    let width: usize = prefix.iter().map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref())).sum();
+    let render = text::Render { width: render.width.saturating_sub(width).max(1), ..*render };
+    render
+        .rows(text)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let mut spans = if i == 0 { prefix.clone() } else { vec![Span::raw(" ".repeat(width))] };
+            spans.extend(row.spans);
+            Line::from(spans).style(row.style)
+        })
+        .collect()
+}
+
 /// Search and highlight matches.
 const HIGHLIGHT: Style = Style::new().fg(BLACK).bg(Color::Indexed(221));
 

@@ -92,11 +92,15 @@ pub trait Source: Send {
     fn spawn(self: Box<Self>, out: Emitter) -> JoinHandle<()>;
 }
 
-/// Turns sources that stand for several streams into one source per pane.
-/// Today that is compose: one pane per service.
+/// Turns sources that stand for several streams into one source per pane:
+/// compose, one pane per service; k8s, one per container.
 pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
     let mut out = Vec::new();
     for source in sources {
+        if let SourceSpec::K8s { .. } = &source.spec {
+            out.extend(expand_k8s(source).await?);
+            continue;
+        }
         let SourceSpec::Compose { services, file } = &source.spec else {
             out.push(source);
             continue;
@@ -120,6 +124,54 @@ pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
     Ok(out)
 }
 
+/// One pane per container, whose pods (all of a workload's) are followed
+/// together. Containers are mixed only when asked (`--all-containers`).
+async fn expand_k8s(source: SourceConfig) -> Result<Vec<SourceConfig>> {
+    let SourceSpec::K8s { container, args, .. } = &source.spec else { unreachable!() };
+    let target = k8s_target(&source.spec);
+    let all_containers = args.iter().any(|a| a.starts_with("--all-containers"));
+    if !target.is_workload() && (container.is_some() || all_containers) {
+        return Ok(vec![source]);
+    }
+    let pods = tools::k8s_pods(&target).await?;
+    let containers = match (container, all_containers) {
+        (None, false) if pods.containers.len() > 1 => pods.containers,
+        _ => vec![],
+    };
+    let with = |container: Option<String>| {
+        let mut spec = source.spec.clone();
+        if let SourceSpec::K8s { pods: p, container: c, .. } = &mut spec {
+            *p = pods.selector.clone();
+            if container.is_some() {
+                *c = container.clone();
+            }
+        }
+        let name = match (&source.name, &container) {
+            (Some(n), Some(c)) => Some(format!("{n}:{c}")),
+            _ => source.name.clone(),
+        };
+        SourceConfig { spec, name, ..source.clone() }
+    };
+    if containers.is_empty() {
+        return Ok(vec![with(None)]);
+    }
+    Ok(containers.into_iter().map(|c| with(Some(c))).collect())
+}
+
+fn k8s_target(spec: &SourceSpec) -> tools::K8sTarget {
+    let SourceSpec::K8s { target, namespace, context, container, args, pods } = spec else {
+        panic!("not a k8s source: {spec}")
+    };
+    tools::K8sTarget {
+        target: target.clone(),
+        namespace: namespace.clone(),
+        context: context.clone(),
+        container: container.clone(),
+        args: args.clone(),
+        pods: pods.clone(),
+    }
+}
+
 /// `tail`: existing lines to read when the source starts.
 pub fn build(config: &SourceConfig, tail: usize) -> Box<dyn Source> {
     let command = |argv| Box::new(CommandSource::new(argv).restart(config.restart()));
@@ -128,16 +180,7 @@ pub fn build(config: &SourceConfig, tail: usize) -> Box<dyn Source> {
         SourceSpec::Cmd { command: c } => Box::new(CommandSource::shell(c).restart(config.restart())),
         SourceSpec::Docker { container } => command(tools::docker(container.clone(), tail)),
         SourceSpec::Compose { services, file } => command(tools::compose(file.clone(), services.clone(), tail)),
-        SourceSpec::K8s { target, namespace, context, container, args } => command(tools::k8s(
-            tools::K8sTarget {
-                target: target.clone(),
-                namespace: namespace.clone(),
-                context: context.clone(),
-                container: container.clone(),
-                args: args.clone(),
-            },
-            tail,
-        )),
+        spec @ SourceSpec::K8s { .. } => command(tools::k8s(k8s_target(spec), tail)),
         SourceSpec::Journal { unit } => command(tools::journal(unit.clone(), tail)),
         SourceSpec::Stdin => Box::new(StdinSource),
     }

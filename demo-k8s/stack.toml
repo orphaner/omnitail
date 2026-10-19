@@ -1,0 +1,13 @@
+# Two deployments of three pods with three containers each: six panes, the
+# three pods of each merged behind their badge. Needs demo-k8s/workloads.yaml
+# applied (see its header).
+
+[[source]]
+type = "k8s"
+target = "deploy/shop"
+namespace = "omnitaildemo"
+
+[[source]]
+type = "k8s"
+target = "deploy/billing"
+namespace = "omnitaildemo"

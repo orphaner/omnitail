@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
     let mut app = App::new(panes, library, settings.history, settings.strip_ansi);
     for ((pane, config), tail) in app.panes.iter_mut().zip(&sources).zip(tails) {
         pane.level = settings.level.or(config.level);
+        pane.pod_prefix = config.prefixes_pods();
         pane.buffer.grow(tail.unwrap_or(0));
     }
     app.start_solo();

@@ -40,6 +40,10 @@ pub enum SourceSpec {
         /// Extra `kubectl logs` arguments.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
+        /// Label selector of a workload's pods, found at start: their logs
+        /// are followed together, each line tagged with its pod.
+        #[serde(skip)]
+        pods: Option<String>,
     },
     /// systemd journal, of one unit or of everything.
     Journal {
@@ -70,16 +74,27 @@ impl FromStr for SourceSpec {
                 file: None,
             }),
             "k8s" => {
-                // `k8s:deploy/api -n prod`: a target, then raw kubectl arguments.
+                // `k8s:deploy/api -n prod`: a target, then kubectl arguments.
                 let mut words = rest.split_whitespace();
                 let target = words.next().ok_or("empty source")?.to_owned();
-                Ok(SourceSpec::K8s {
-                    target,
-                    namespace: None,
-                    context: None,
-                    container: None,
-                    args: words.map(Into::into).collect(),
-                })
+                let (mut namespace, mut context, mut container, mut args) = (None, None, None, Vec::new());
+                while let Some(word) = words.next() {
+                    let (flag, inline) = match word.split_once('=') {
+                        Some((flag, value)) if flag.starts_with("--") => (flag, Some(value.to_owned())),
+                        _ => (word, None),
+                    };
+                    let slot = match flag {
+                        "-n" | "--namespace" => &mut namespace,
+                        "--context" => &mut context,
+                        "-c" | "--container" => &mut container,
+                        _ => {
+                            args.push(word.to_owned());
+                            continue;
+                        }
+                    };
+                    *slot = Some(inline.or_else(|| words.next().map(Into::into)).ok_or(format!("{word} needs a value"))?);
+                }
+                Ok(SourceSpec::K8s { target, namespace, context, container, args, pods: None })
             }
             "journal" => Ok(SourceSpec::Journal { unit: Some(rest.trim()).filter(|u| !u.is_empty()).map(Into::into) }),
             // Something like `dokcer:x` is far more likely a typo than a file name.
@@ -104,8 +119,11 @@ impl fmt::Display for SourceSpec {
             SourceSpec::Docker { container } => write!(f, "docker:{container}"),
             SourceSpec::Compose { services, .. } if services.is_empty() => write!(f, "compose"),
             SourceSpec::Compose { services, .. } => write!(f, "compose:{}", services.join(",")),
-            SourceSpec::K8s { target, namespace, .. } => {
+            SourceSpec::K8s { target, namespace, container, .. } => {
                 write!(f, "k8s:{target}")?;
+                if let Some(c) = container {
+                    write!(f, " · {c}")?;
+                }
                 match namespace {
                     Some(ns) => write!(f, " -n {ns}"),
                     None => Ok(()),
@@ -166,6 +184,11 @@ impl SourceConfig {
         }
     }
 
+    /// Whether lines come prefixed with their pod (`kubectl logs --prefix`).
+    pub fn prefixes_pods(&self) -> bool {
+        matches!(&self.spec, SourceSpec::K8s { target, pods, .. } if pods.is_some() || target.contains('='))
+    }
+
     pub fn restart(&self) -> bool {
         self.restart.unwrap_or(matches!(
             self.spec,
@@ -222,13 +245,15 @@ mod tests {
     }
 
     #[test]
-    fn k8s_target_then_raw_args() {
-        let SourceSpec::K8s { target, args, .. } = parse("k8s:deploy/api -n prod --since=1h").unwrap() else {
-            panic!()
-        };
+    fn k8s_target_then_kubectl_args() {
+        let spec = parse("k8s:deploy/api -n prod --since=1h --context=kind -c app").unwrap();
+        let SourceSpec::K8s { target, namespace, context, container, args, .. } = &spec else { panic!() };
         assert_eq!(target, "deploy/api");
-        assert_eq!(args, ["-n", "prod", "--since=1h"]);
+        assert_eq!((namespace.as_deref(), context.as_deref(), container.as_deref()), (Some("prod"), Some("kind"), Some("app")));
+        assert_eq!(args, &["--since=1h"]);
+        assert_eq!(spec.to_string(), "k8s:deploy/api · app -n prod");
         assert!(parse("k8s:").is_err());
+        assert!(parse("k8s:pod/x -n").is_err(), "a flag without its value");
     }
 
     #[test]

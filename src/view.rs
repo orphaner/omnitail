@@ -121,7 +121,7 @@ impl<'a> HistoryView<'a> {
     /// The line at `pos` if the filter and the level let it through.
     pub fn visible(&self, pos: Pos) -> Option<ViewLine<'a>> {
         self.line(pos).filter(|l| {
-            Level::passes(l.entry.level, self.level) && self.filter.is_none_or(|f| f.accepts(&l.entry.text))
+            Level::passes(l.entry.level, self.level) && self.filter.is_none_or(|f| f.accepts_entry(l.entry))
         })
     }
 
@@ -164,7 +164,7 @@ impl<'a> HistoryView<'a> {
     /// Next visible line matching `pattern` from `from`, in `forward`
     /// direction, wrapping around once. Also says whether it wrapped.
     pub fn search(&self, from: Pos, forward: bool, pattern: &Pattern) -> Option<(Pos, bool)> {
-        let hit = |p: &Pos| self.visible(*p).is_some_and(|l| pattern.accepts(&l.entry.text));
+        let hit = |p: &Pos| self.visible(*p).is_some_and(|l| pattern.accepts_entry(l.entry));
         let (first, end) = (self.first(), self.end());
         let found = if forward {
             (from.saturating_add(1).max(first)..end).find(hit).map(|p| (p, false))
@@ -184,7 +184,7 @@ impl<'a> HistoryView<'a> {
     /// (rank of the match at `at`, starting at 1; total matches).
     pub fn count(&self, pattern: &Pattern, at: Pos) -> (usize, usize) {
         let matches: Vec<Pos> = (self.first()..self.end())
-            .filter(|&p| self.visible(p).is_some_and(|l| pattern.accepts(&l.entry.text)))
+            .filter(|&p| self.visible(p).is_some_and(|l| pattern.accepts_entry(l.entry)))
             .collect();
         let rank = matches.iter().filter(|&&p| p <= at).count();
         (rank, matches.len())

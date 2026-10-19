@@ -31,11 +31,13 @@ Sources:
 | `cmd:'command'` | stdout and stderr of a shell command |
 | `docker:container` or `d:container` | `docker logs --follow` of a container |
 | `compose:` / `compose:web,db` (or `dc:…`) | a compose project, one pane per service |
-| `k8s:deploy/api [kubectl args]` | `kubectl logs --follow`; a label selector (`k8s:app=api`) merges its pods |
+| `k8s:deploy/api [-n ns] [--context ctx] [-c container] [kubectl args]` | `kubectl logs --follow`: one pane per container, with all the pods of a workload (or of a label selector, `k8s:app=api`) merged in it, each line behind a badge naming its pod |
 | `journal:` / `journal:nginx` | the systemd journal, or one unit |
 | `-` | omnitail's stdin (`make 2>&1 \| omnitail - app.log`) |
 
 Container sources (docker, compose, k8s) restart when their stream ends, resuming where it stopped.
+
+A k8s source looks at what its target runs when omnitail starts. Each container gets its own pane (native sidecars included, init containers left out), unless one is chosen (`-c app`) or `--all-containers` is passed. The pods of a deployment, statefulset or daemonset are followed together: replicas share a pane, and each line starts with its pod's badge (`xk2p9`, the end of a replica's name), with the same color in every pane. `e` filters on badges too. [`demo-k8s/`](demo-k8s) has workloads covering these cases.
 
 Without any source, omnitail follows the compose project of the current directory (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`), one pane per service. With a single source, it opens straight on its full-screen history (see [Keys](#keys)), following the end like `tail -f`; `q` quits.
 

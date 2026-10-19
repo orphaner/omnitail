@@ -71,7 +71,7 @@ fn tail_rows(
         if !shows(entry) {
             continue;
         }
-        let rows = render.rows(&entry.text);
+        let rows = super::prefixed_rows(render, &entry.text, super::origin_badge(entry));
         count += rows.len();
         chunks.push(rows);
     }

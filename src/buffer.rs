@@ -6,6 +6,7 @@
 //! comes after it, while the scrollback still has everything.
 
 use std::collections::VecDeque;
+use std::sync::Arc;
 
 use chrono::{DateTime, Local};
 
@@ -23,6 +24,17 @@ pub struct Entry {
     /// Severity, read from the line or inherited from the previous one
     /// (stack traces follow their error); `None` when nothing said.
     pub level: Option<Level>,
+    /// Where the line comes from within its source: a pod, when a k8s
+    /// source follows several.
+    pub origin: Option<Origin>,
+}
+
+/// A line's origin, shown as a colored badge before it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    pub name: Arc<str>,
+    /// Index in the badge palette, the same for a pod in every pane.
+    pub color: usize,
 }
 
 pub struct Buffer {
@@ -63,7 +75,7 @@ impl Buffer {
     #[cfg(test)]
     pub fn push(&mut self, line: String) {
         let arrival = self.next_seq;
-        self.push_entry(Entry { text: line, arrival, at: Local::now(), level: None });
+        self.push_entry(Entry { text: line, arrival, at: Local::now(), level: None, origin: None });
     }
 
     pub fn push_entry(&mut self, entry: Entry) {

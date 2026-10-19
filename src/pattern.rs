@@ -53,6 +53,14 @@ impl Pattern {
         matched != self.negated
     }
 
+    /// Whether a line passes, its origin (pod badge) included.
+    pub fn accepts_entry(&self, entry: &crate::buffer::Entry) -> bool {
+        match &entry.origin {
+            Some(origin) if self.regex.is_match(&origin.name) => !self.negated,
+            _ => self.accepts(&entry.text),
+        }
+    }
+
     /// Byte ranges to highlight in displayed text (none for a negated pattern).
     pub fn find_ranges(&self, text: &str) -> Vec<Range<usize>> {
         if self.negated {

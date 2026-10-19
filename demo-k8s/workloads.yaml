@@ -1,0 +1,270 @@
+# Kubernetes demo for omnitail: workloads covering the pod and container
+# layouts omnitail has to split into panes. Everything lives in the
+# `omnitaildemo` namespace and writes random logs.
+#
+#   kubectl apply -f demo-k8s/workloads.yaml
+#   kubectl delete -f demo-k8s/workloads.yaml    # when done
+#
+# omnitail gives one pane per container, and merges a workload's pods in it,
+# each line behind a badge naming its pod:
+#   omnitail 'k8s:deploy/api -n omnitaildemo'                                 # 1 pane
+#   omnitail 'k8s:deploy/api -n omnitaildemo' 'k8s:deploy/worker -n omnitaildemo'   # 2
+#   omnitail 'k8s:deploy/shop -n omnitaildemo'                                # 3 (app, proxy, shipper)
+#   omnitail -c demo-k8s/stack.toml                                           # shop + billing: 6
+#   omnitail 'k8s:sts/db -n omnitaildemo' 'k8s:debug -n omnitaildemo'        # db-0/db-1 badges; shell, tcpdump
+#
+# | Workload       | Pods | Containers                    | Case                        |
+# |----------------|------|-------------------------------|-----------------------------|
+# | deploy/api     | 3    | 1 (JSON)                      | replicas, one container     |
+# | deploy/worker  | 3    | 1 (logfmt)                    | with api: two deployments   |
+# | deploy/shop    | 3    | app, proxy + native sidecar   | replicas, several containers|
+# | deploy/billing | 3    | app, proxy, cache             | with shop: two of them      |
+# | sts/db         | 2    | 1 (own ANSI colors)           | stable pod names (db-0)     |
+# | pod/debug      | 1    | 2                             | a bare pod                  |
+#
+# shop also has a classic init container (`migrate`), which omnitail ignores:
+# it has finished by the time anyone reads logs.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: omnitaildemo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: omnitaildemo
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: api}
+  template:
+    metadata:
+      labels: {app: api, part-of: omnitaildemo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: api
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- info info info debug warn error
+                shift $((RANDOM % 6)); level=$1
+                printf '{"time":"%s","level":"%s","msg":"handled request","user_id":%s,"duration_ms":%s,"ok":true}\n' \
+                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 100)) $((RANDOM % 300))
+                sleep $((RANDOM % 3 + 1))
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: omnitaildemo
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: worker}
+  template:
+    metadata:
+      labels: {app: worker, part-of: omnitaildemo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: worker
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- info info info warn error
+                shift $((RANDOM % 5)); level=$1
+                printf 'time=%s level=%s msg="job processed" job=%s attempt=%s duration=%sms\n' \
+                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 1000)) $((RANDOM % 3 + 1)) $((RANDOM % 800))
+                sleep $((RANDOM % 3 + 1))
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop
+  namespace: omnitaildemo
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: shop}
+  template:
+    metadata:
+      labels: {app: shop, part-of: omnitaildemo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      initContainers:
+        # Classic init container: runs once before the others.
+        - name: migrate
+          image: alpine:3
+          command: [sh, -c, 'echo "migrations applied"']
+        # Native sidecar (Kubernetes 1.29+): an init container that keeps running.
+        - name: shipper
+          image: alpine:3
+          restartPolicy: Always
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while true; do
+                i=$((i+1))
+                echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') INFO shipped batch $i ($((RANDOM % 200)) lines)"
+                sleep 3
+              done
+      containers:
+        - name: app
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- info info info warn error
+                shift $((RANDOM % 5)); level=$1
+                printf '{"time":"%s","level":"%s","msg":"order placed","order_id":%s,"amount":%s.%02d}\n' \
+                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 10000)) $((RANDOM % 300)) $((RANDOM % 100))
+                sleep $((RANDOM % 3 + 1))
+              done
+        - name: proxy
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- 200 200 200 201 304 404 500
+                shift $((RANDOM % 7)); code=$1
+                set -- GET GET GET POST DELETE
+                shift $((RANDOM % 5)); method=$1
+                printf '10.42.0.%s - - [%s] "%s /orders/%s HTTP/1.1" %s %s "-" "curl/8.5"\n' \
+                  $((RANDOM % 250)) "$(date '+%d/%b/%Y:%H:%M:%S +0000')" $method $((RANDOM % 900)) $code $((RANDOM % 5000))
+                sleep 1
+              done
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: billing
+  namespace: omnitaildemo
+spec:
+  replicas: 3
+  selector:
+    matchLabels: {app: billing}
+  template:
+    metadata:
+      labels: {app: billing, part-of: omnitaildemo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: app
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- info info info debug warn error
+                shift $((RANDOM % 6)); level=$1
+                printf 'time=%s level=%s msg="invoice sent" invoice=%s customer=%s\n' \
+                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 100000)) $((RANDOM % 500))
+                sleep $((RANDOM % 4 + 1))
+              done
+        - name: proxy
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- 200 200 200 201 404 500
+                shift $((RANDOM % 6)); code=$1
+                printf '10.42.1.%s - - [%s] "POST /invoices HTTP/1.1" %s %s "-" "billing-client/2.1"\n' \
+                  $((RANDOM % 250)) "$(date '+%d/%b/%Y:%H:%M:%S +0000')" $code $((RANDOM % 2000))
+                sleep 2
+              done
+        - name: cache
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              while true; do
+                set -- INFO INFO WARN
+                shift $((RANDOM % 3)); level=$1
+                echo "$(date -u '+%Y-%m-%d %H:%M:%S') $level cache hit ratio $((RANDOM % 100))% ($((RANDOM % 5000)) keys)"
+                sleep 4
+              done
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: db
+  namespace: omnitaildemo
+spec:
+  replicas: 2
+  serviceName: db
+  selector:
+    matchLabels: {app: db}
+  template:
+    metadata:
+      labels: {app: db, part-of: omnitaildemo}
+    spec:
+      terminationGracePeriodSeconds: 1
+      containers:
+        - name: db
+          image: alpine:3
+          resources: {requests: {cpu: 5m, memory: 8Mi}}
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while true; do
+                i=$((i+1))
+                printf '\033[33mdb\033[0m checkpoint %s\n' $i
+                sleep 2
+              done
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: debug
+  namespace: omnitaildemo
+  labels: {part-of: omnitaildemo}
+spec:
+  terminationGracePeriodSeconds: 1
+  containers:
+    - name: shell
+      image: alpine:3
+      resources: {requests: {cpu: 5m, memory: 8Mi}}
+      command: [sh, -c, 'while true; do echo "debug shell alive, uptime $(cut -d. -f1 /proc/uptime)s"; sleep 5; done']
+    - name: tcpdump
+      image: alpine:3
+      resources: {requests: {cpu: 5m, memory: 8Mi}}
+      command:
+        - sh
+        - -c
+        - |
+          while true; do
+            printf '%s IP 10.42.0.%s.%s > 10.42.1.%s.443: Flags [S], length 0\n' \
+              "$(date '+%H:%M:%S.%N' | cut -c1-15)" $((RANDOM % 250)) $((RANDOM % 60000)) $((RANDOM % 250))
+            sleep 1
+          done

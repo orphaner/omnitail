@@ -3,7 +3,6 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use super::text::Render;
 use crate::app::{Pane, Scrollback};
@@ -64,9 +63,6 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
     frame.render_widget(Paragraph::new(shown.rows), body);
 }
 
-/// Badge colors of panes in the merged view (fixed palette, dark text).
-const PANE_COLORS: [u8; 8] = [75, 114, 221, 176, 80, 215, 203, 147];
-
 struct Shown {
     rows: Vec<Line<'static>>,
     top: Pos,
@@ -98,14 +94,12 @@ impl Painter<'_> {
             prefix.push(Span::styled(format!("{} ", line.entry.at.format("%H:%M:%S%.3f")), super::dim()));
         }
         if self.view.is_merged() {
-            let bg = ratatui::style::Color::Indexed(PANE_COLORS[line.pane % PANE_COLORS.len()]);
-            prefix.push(Span::styled(format!("{:>2} ", line.pane + 1), Style::new().fg(super::BLACK).bg(bg)));
-            prefix.push(Span::raw(" "));
+            prefix.extend(super::badge(format!("{:>2} ", line.pane + 1), line.pane));
         }
-        let prefix_width: usize = prefix.iter().map(|s| s.content.width()).sum();
+        prefix.extend(super::origin_badge(line.entry));
         let pane = &self.panes[line.pane];
         let render = Render {
-            width: self.width.saturating_sub(prefix_width).max(1),
+            width: self.width,
             strip: self.opts.strip,
             scheme: pane.color.active(),
             wrap: self.opts.wrap,
@@ -113,13 +107,8 @@ impl Painter<'_> {
             highlight: self.highlight,
         };
         let is_cursor = Some(pos) == cursor;
-        for (i, row) in render.rows(&line.entry.text).into_iter().enumerate() {
-            // Continuation rows are indented under the text, not the prefix.
-            let lead = if i == 0 { prefix.clone() } else { vec![Span::raw(" ".repeat(prefix_width))] };
-            let mut spans = lead;
-            spans.extend(row.spans);
-            let style = if is_cursor { row.style.bg(super::CURSOR_BG) } else { row.style };
-            rows.push(Line::from(spans).style(style));
+        for row in super::prefixed_rows(&render, &line.entry.text, prefix) {
+            rows.push(if is_cursor { row.patch_style(Style::new().bg(super::CURSOR_BG)) } else { row });
         }
         rows
     }

@@ -380,6 +380,32 @@ mod tests {
     }
 
     #[test]
+    fn search_total_counts_matches_that_arrive_later() {
+        let mut app = demo();
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('/'));
+        for c in "a1".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        press(&mut app, KeyCode::Enter);
+        let title = |app: &mut App| screen(app).lines().next().unwrap().to_owned();
+        assert!(title(&mut app).contains("match 1/11"), "wrapped to the first of a1, a10…a19: {}", title(&mut app));
+        app.ingest(0, SourceEvent::Line("a1 again".into()));
+        app.ingest(0, SourceEvent::Line("nothing".into()));
+        app.ingest(0, SourceEvent::Line("a1 once more".into()));
+        let total = |app: &mut App| {
+            screen(app);
+            match &app.mode {
+                Mode::Scrollback(sb) => sb.search.as_ref().map(|s| (s.rank, s.total)),
+                _ => None,
+            }
+        };
+        assert_eq!(total(&mut app), Some((1, 13)), "the two new matches counted");
+        assert_eq!(total(&mut app), Some((1, 13)), "and only once");
+    }
+
+    #[test]
     fn body_heights_match_rendered_panes() {
         // 12 rows: 11 for panes, so 6 + 5, minus one title row each.
         assert_eq!(pane_body_heights(Rect::new(0, 0, 50, 12), 2), [5, 4]);

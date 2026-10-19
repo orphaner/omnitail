@@ -23,6 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
         (Some(_), None) => Some(sb.view(panes).end()),
         (Some(_), kept) => kept,
     };
+    sb.count_new_matches(panes);
     let view = sb.view(panes);
     let highlight = sb.search.as_ref().map(|s| &s.pattern);
     let layout = Painter { view, panes, opts, highlight, width: body.width as usize, hscroll: sb.hscroll };

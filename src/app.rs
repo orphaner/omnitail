@@ -229,6 +229,9 @@ pub struct Search {
     /// Rank of the selected match and number of matches, when last searched.
     pub rank: usize,
     pub total: usize,
+    /// Position up to which `total` counted; lines arriving later are
+    /// added as they come (`Scrollback::count_new_matches`).
+    pub counted: Pos,
 }
 
 impl Scrollback {
@@ -243,6 +246,24 @@ impl Scrollback {
 
     pub fn view<'a>(&'a self, panes: &'a [Pane]) -> HistoryView<'a> {
         HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused).level(self.level)
+    }
+
+    /// Adds the matches among lines that arrived since the search counted
+    /// them, so its total keeps up (only the new lines are looked at).
+    pub fn count_new_matches(&mut self, panes: &[Pane]) {
+        let Some(search) = &self.search else { return };
+        if search.total == 0 {
+            return;
+        }
+        let view = self.view(panes);
+        let end = view.end();
+        let new = (search.counted..end)
+            .filter(|&p| view.visible(p).is_some_and(|l| search.pattern.accepts_entry(l.entry)))
+            .count();
+        if let Some(search) = &mut self.search {
+            search.total += new;
+            search.counted = end;
+        }
     }
 
     /// Lines shown in the view that arrived since the cursor left the end.
@@ -941,9 +962,10 @@ impl App {
                 if wrapped {
                     self.notice = Some(format!("search wrapped to the {}", if forward { "top" } else { "bottom" }));
                 }
+                let counted = view.end();
                 sb.cursor = Some(pos);
                 if let Some(search) = &mut sb.search {
-                    (search.rank, search.total) = (rank, total);
+                    (search.rank, search.total, search.counted) = (rank, total, counted);
                 }
             }
             None => self.notice = Some(format!("not found: {}", search.pattern.text)),
@@ -1083,7 +1105,7 @@ impl App {
                     // An empty search repeats the previous pattern, as in less.
                     let pattern = pattern.or_else(|| sb.search.take().map(|s| s.pattern));
                     if let Some(pattern) = pattern {
-                        sb.search = Some(Search { pattern, forward, rank: 0, total: 0 });
+                        sb.search = Some(Search { pattern, forward, rank: 0, total: 0, counted: 0 });
                         self.find(sb, forward);
                     }
                 }

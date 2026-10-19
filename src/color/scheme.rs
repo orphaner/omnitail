@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -172,6 +172,9 @@ pub struct Library {
     info: BTreeMap<String, SchemeInfo>,
     /// File path regexes, in loading order.
     paths: Vec<(Regex, String, Origin)>,
+    /// Chains already compiled, by their names joined with `+`: each pane
+    /// guessing a format asks again, and compiling a chain takes milliseconds.
+    chains: Mutex<HashMap<String, Arc<Scheme>>>,
 }
 
 /// A scheme compiled on first use: hundreds of multitail rules would
@@ -194,7 +197,7 @@ const MULTITAIL: &str = include_str!("multitail.toml");
 
 impl Library {
     pub fn new(user: &HashMap<String, SchemeDef>) -> Result<Self, String> {
-        let mut lib = Self { schemes: HashMap::new(), info: BTreeMap::new(), paths: Vec::new() };
+        let mut lib = Self { schemes: HashMap::new(), info: BTreeMap::new(), paths: Vec::new(), chains: Mutex::default() };
         for (text, origin) in [(MULTITAIL, Origin::Multitail), (BUILTIN, Origin::Omnitail)] {
             let file: SchemeFile = toml::from_str(text).map_err(|e| format!("{} schemes: {e}", origin.label()))?;
             for (name, value) in file.scheme {
@@ -269,7 +272,11 @@ impl Library {
         match &schemes[..] {
             [] => Err("no color scheme given".into()),
             [one] => Ok(one.clone()),
-            _ => Ok(Arc::new(Scheme::chain(&schemes))),
+            _ => {
+                let mut chains = self.chains.lock().unwrap_or_else(|e| e.into_inner());
+                let chain = chains.entry(names.join("+")).or_insert_with(|| Arc::new(Scheme::chain(&schemes)));
+                Ok(chain.clone())
+            }
         }
     }
 }
@@ -413,5 +420,7 @@ mod tests {
         let lib = Library::new(&HashMap::new()).unwrap();
         let chained = lib.resolve(&["json".into(), "generic".into()]).unwrap();
         assert_eq!(chained.name, "json+generic");
+        let again = lib.resolve(&["json".into(), "generic".into()]).unwrap();
+        assert!(Arc::ptr_eq(&chained, &again), "compiled once");
     }
 }

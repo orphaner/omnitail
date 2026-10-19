@@ -68,12 +68,14 @@ impl PaneColor {
         sample.push(line.to_owned());
         let guess = detect::detect(sample.iter().map(String::as_str));
         let settled = sample.len() >= detect::SAMPLE;
-        if settled || guess.is_some() {
+        let label = guess.unwrap_or(FALLBACK);
+        // Only when the guess changes: resolving a chain is not free.
+        if (settled || guess.is_some()) && self.label != label {
             let names: Vec<String> = guess.into_iter().chain([FALLBACK]).map(Into::into).collect();
             if let Ok(scheme) = library.resolve(&names) {
                 self.scheme = Some(scheme);
             }
-            self.label = guess.unwrap_or(FALLBACK).into();
+            self.label = label.into();
         }
         if settled {
             self.sample = None;

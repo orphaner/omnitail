@@ -53,10 +53,10 @@ impl Pattern {
         matched != self.negated
     }
 
-    /// Whether a line passes, its origin (pod badge) included.
+    /// Whether a line passes, its origin (pod, container) included.
     pub fn accepts_entry(&self, entry: &crate::buffer::Entry) -> bool {
         match &entry.origin {
-            Some(origin) if self.regex.is_match(&origin.name) => !self.negated,
+            Some(o) if self.regex.is_match(&o.pod) || self.regex.is_match(&o.container) => !self.negated,
             _ => self.accepts(&entry.text),
         }
     }

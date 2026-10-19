@@ -29,12 +29,16 @@ pub struct Entry {
     pub origin: Option<Origin>,
 }
 
-/// A line's origin, shown as a colored badge before it.
+/// Where a line comes from within a k8s source, shown as badges before it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
-    pub name: Arc<str>,
+    pub pod: Arc<str>,
+    /// The pod as its badge shows it (the end of a replica's name).
+    pub badge: Arc<str>,
     /// Index in the badge palette, the same for a pod in every pane.
     pub color: usize,
+    pub container: Arc<str>,
+    pub container_color: usize,
 }
 
 pub struct Buffer {
@@ -64,6 +68,10 @@ impl Buffer {
             next_seq: 0,
             clears: VecDeque::new(),
         }
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Keeps `n` more lines.

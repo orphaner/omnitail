@@ -124,42 +124,22 @@ pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
     Ok(out)
 }
 
-/// One pane per container, whose pods (all of a workload's) are followed
-/// together. Containers are mixed only when asked (`--all-containers`).
-async fn expand_k8s(source: SourceConfig) -> Result<Vec<SourceConfig>> {
-    let SourceSpec::K8s { container, args, .. } = &source.spec else { unreachable!() };
-    let target = k8s_target(&source.spec);
-    let all_containers = args.iter().any(|a| a.starts_with("--all-containers"));
-    if !target.is_workload() && (container.is_some() || all_containers) {
-        return Ok(vec![source]);
-    }
-    let pods = tools::k8s_pods(&target).await?;
-    let containers = match (container, all_containers) {
-        (None, false) if pods.containers.len() > 1 => pods.containers,
-        _ => vec![],
-    };
-    let with = |container: Option<String>| {
-        let mut spec = source.spec.clone();
-        if let SourceSpec::K8s { pods: p, container: c, .. } = &mut spec {
-            *p = pods.selector.clone();
-            if container.is_some() {
-                *c = container.clone();
-            }
+/// What a k8s source runs: a workload's pods are followed together, and
+/// their names and containers let panes be split later.
+async fn expand_k8s(mut source: SourceConfig) -> Result<Vec<SourceConfig>> {
+    let found = tools::k8s_pods(&k8s_target(&source.spec)).await?;
+    if let SourceSpec::K8s { pods, running, container, .. } = &mut source.spec {
+        *pods = found.selector;
+        *running = found.pods;
+        if let Some(c) = container {
+            running.iter_mut().for_each(|p| p.containers = vec![c.clone()]);
         }
-        let name = match (&source.name, &container) {
-            (Some(n), Some(c)) => Some(format!("{n}:{c}")),
-            _ => source.name.clone(),
-        };
-        SourceConfig { spec, name, ..source.clone() }
-    };
-    if containers.is_empty() {
-        return Ok(vec![with(None)]);
     }
-    Ok(containers.into_iter().map(|c| with(Some(c))).collect())
+    Ok(vec![source])
 }
 
 fn k8s_target(spec: &SourceSpec) -> tools::K8sTarget {
-    let SourceSpec::K8s { target, namespace, context, container, args, pods } = spec else {
+    let SourceSpec::K8s { target, namespace, context, container, args, pods, .. } = spec else {
         panic!("not a k8s source: {spec}")
     };
     tools::K8sTarget {

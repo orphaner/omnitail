@@ -45,9 +45,19 @@ fn badge(text: String, color: usize) -> [Span<'static>; 2] {
     [Span::styled(text, Style::new().fg(BLACK).bg(bg)), Span::raw(" ")]
 }
 
-/// The badge of the pod a line comes from, if it says.
-fn origin_badge(entry: &crate::buffer::Entry) -> Vec<Span<'static>> {
-    entry.origin.iter().flat_map(|o| badge(format!(" {} ", o.name), o.color)).collect()
+/// The badges of the pod and container a line comes from, as far as the
+/// pane needs them.
+fn origin_badges(entry: &crate::buffer::Entry, badges: crate::app::Badges) -> Vec<Span<'static>> {
+    let Some(o) = &entry.origin else { return Vec::new() };
+    let mut spans = Vec::new();
+    if badges.pod {
+        spans.extend(badge(format!(" {} ", o.badge), o.color));
+    }
+    if let Some(width) = badges.container {
+        let color = Color::Indexed(BADGE_COLORS[o.container_color % BADGE_COLORS.len()]);
+        spans.push(Span::styled(format!("{:<width$} ", o.container), Style::new().fg(color).bold()));
+    }
+    spans
 }
 
 /// Rows of `text` behind `prefix` (badges, arrival time): the text gets the
@@ -211,10 +221,19 @@ fn ellipsize(s: &str, max: usize) -> String {
 /// "http · " for a colored pane, "http off · " once toggled off, nothing
 /// for a pane without coloring.
 fn color_label(pane: &Pane) -> String {
+    // Containers mixed in the pane: the formats guessed for each.
+    let mut label = pane.color.label.clone();
+    if pane.color.choice == "auto" && !pane.by_container.is_empty() {
+        let mut labels: Vec<&str> =
+            pane.by_container.values().map(|c| c.label.as_str()).filter(|&l| l != "auto").collect();
+        labels.sort_unstable();
+        labels.dedup();
+        label = labels.join("/");
+    }
     match (pane.color.available(), pane.color.enabled) {
         (false, _) => String::new(),
-        (true, true) => format!("{} · ", pane.color.label),
-        (true, false) => format!("{} off · ", pane.color.label),
+        (true, true) => format!("{label} · "),
+        (true, false) => format!("{label} off · "),
     }
 }
 
@@ -237,6 +256,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("C c", "Colors"),
             ("s", "Scheme"),
             ("w", "Wrap"),
+            ("⏎ ⌫", "Split"),
         ],
         Mode::Schemes(_) => &[("Esc", "Cancel"), ("↑↓", "Choose"), ("Enter", "Apply"), ("abc", "Filter")],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],

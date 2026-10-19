@@ -48,18 +48,22 @@ pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, opts: &P
     };
     let start = pane.buffer.view_start();
     let end = pane.view_end().max(start);
-    let rows = tail_rows(&pane.buffer, start, end, body.height as usize, &render, |e| pane.shows(e));
+    let rows_of = |e: &Entry| {
+        let render = Render { scheme: pane.scheme_for(e), ..render };
+        super::prefixed_rows(&render, &e.text, super::origin_badges(e, pane.badges))
+    };
+    let rows = tail_rows(&pane.buffer, start, end, body.height as usize, rows_of, |e| pane.shows(e));
     frame.render_widget(Paragraph::new(rows), body);
 }
 
-/// The last `height` rows of lines `start..end` that pass `shows`,
+/// The last `height` rows (`rows_of` a line) of lines `start..end` that pass `shows`,
 /// bottom-anchored like a terminal: the newest line is on the last row.
 fn tail_rows(
     buffer: &Buffer,
     start: Seq,
     end: Seq,
     height: usize,
-    render: &Render,
+    rows_of: impl Fn(&Entry) -> Vec<Line<'static>>,
     shows: impl Fn(&Entry) -> bool,
 ) -> Vec<Line<'static>> {
     let mut chunks = Vec::new();
@@ -71,7 +75,7 @@ fn tail_rows(
         if !shows(entry) {
             continue;
         }
-        let rows = super::prefixed_rows(render, &entry.text, super::origin_badge(entry));
+        let rows = rows_of(entry);
         count += rows.len();
         chunks.push(rows);
     }
@@ -96,11 +100,11 @@ mod tests {
         }
         let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None };
         let all = |_: &Entry| true;
-        assert_eq!(plain(tail_rows(&b, 0, 3, 2, &render, all)), ["def", "z"]);
-        assert_eq!(plain(tail_rows(&b, 2, 3, 5, &render, all)), ["z"], "lines before start (cleared) are hidden");
-        assert_eq!(plain(tail_rows(&b, 0, 2, 5, &render, all)), ["one", "abc", "def"], "lines from end on (paused) too");
+        assert_eq!(plain(tail_rows(&b, 0, 3, 2, |e| render.rows(&e.text), all)), ["def", "z"]);
+        assert_eq!(plain(tail_rows(&b, 2, 3, 5, |e| render.rows(&e.text), all)), ["z"], "lines before start (cleared) are hidden");
+        assert_eq!(plain(tail_rows(&b, 0, 2, 5, |e| render.rows(&e.text), all)), ["one", "abc", "def"], "lines from end on (paused) too");
         let not_z = Pattern::parse("!z", true).unwrap();
         let shows = |e: &Entry| not_z.accepts(&e.text);
-        assert_eq!(plain(tail_rows(&b, 0, 3, 5, &render, shows)), ["one", "abc", "def"], "filtered out");
+        assert_eq!(plain(tail_rows(&b, 0, 3, 5, |e| render.rows(&e.text), shows)), ["one", "abc", "def"], "filtered out");
     }
 }

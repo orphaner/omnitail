@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 
 use super::command::Argv;
+use crate::spec::K8sPod;
 
 fn rfc3339(t: DateTime<Utc>) -> String {
     t.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -120,19 +121,21 @@ pub fn k8s(t: K8sTarget, lines: usize) -> Argv {
     Box::new(move |since| {
         let mut argv = t.kubectl("logs");
         argv.push("--follow".into());
-        if let Some(c) = &t.container {
-            argv.extend(["--container".into(), c.clone()]);
+        // Every line says its pod and container, for badges and splitting.
+        argv.push("--prefix".into());
+        match &t.container {
+            Some(c) => argv.extend(["--container".into(), c.clone()]),
+            None if !t.args.iter().any(|a| a.starts_with("--all-containers")) => argv.push("--all-containers".into()),
+            None => {}
         }
         match since {
             None => argv.push(format!("--tail={lines}")),
             Some(t) => argv.push(format!("--since-time={}", rfc3339(t))),
         }
-        let selector = t.pods.as_ref().or(t.is_selector().then_some(&t.target));
-        if let Some(selector) = selector {
-            // Several pods merged, each line prefixed with its pod.
-            argv.extend(["--selector".into(), selector.clone(), "--prefix".into(), "--max-log-requests=50".into()]);
-        } else {
-            argv.push(t.target.clone());
+        match t.pods.as_ref().or(t.is_selector().then_some(&t.target)) {
+            // One request per pod and container.
+            Some(selector) => argv.extend(["--selector".into(), selector.clone(), "--max-log-requests=100".into()]),
+            None => argv.push(t.target.clone()),
         }
         argv.extend(t.args.iter().cloned());
         argv
@@ -140,50 +143,64 @@ pub fn k8s(t: K8sTarget, lines: usize) -> Argv {
 }
 
 /// What a k8s target runs: for a workload, the label selector of its
-/// pods; and the containers of those pods.
+/// pods; and those pods with their containers.
 #[derive(Debug, PartialEq, Eq)]
 pub struct K8sPods {
     pub selector: Option<String>,
-    pub containers: Vec<String>,
+    pub pods: Vec<K8sPod>,
 }
 
-/// Asks the cluster what `t` runs (`kubectl get … -o json`).
+/// Asks the cluster what `t` runs (`kubectl get … -o json`): a workload's
+/// selector first, then its pods.
 pub async fn k8s_pods(t: &K8sTarget) -> Result<K8sPods> {
-    let mut argv = t.kubectl("get");
+    let get = |what: Vec<String>| {
+        let mut argv = t.kubectl("get");
+        argv.extend(what);
+        argv.extend(strings(["--output", "json"]));
+        async move {
+            let json: serde_json::Value =
+                serde_json::from_str(&output(&argv).await?).context("unexpected kubectl output")?;
+            Ok::<_, anyhow::Error>(json)
+        }
+    };
+    let by_selector = |selector: &str| vec!["pods".into(), "--selector".into(), selector.to_owned()];
     if t.is_selector() {
-        argv.extend(["pods".into(), "--selector".into(), t.target.clone()]);
-    } else if t.target.contains('/') {
-        argv.push(t.target.clone());
-    } else {
-        // `kubectl logs x` means the pod x.
-        argv.push(format!("pod/{}", t.target));
+        return Ok(K8sPods { selector: None, pods: pods_of(&get(by_selector(&t.target)).await?) });
     }
-    argv.extend(strings(["--output", "json"]));
-    let json: serde_json::Value = serde_json::from_str(&output(&argv).await?).context("unexpected kubectl output")?;
-    Ok(parse_k8s_pods(&json))
+    if !t.is_workload() {
+        // `kubectl logs x` means the pod x.
+        let name = t.target.split_once('/').map_or(t.target.as_str(), |(_, name)| name);
+        return Ok(K8sPods { selector: None, pods: pods_of(&get(vec![format!("pod/{name}")]).await?) });
+    }
+    let workload = get(vec![t.target.clone()]).await?;
+    let Some(selector) = label_selector(&workload["spec"]["selector"]) else {
+        // Not something with pods of its own (a service…): kubectl decides.
+        return Ok(K8sPods { selector: None, pods: vec![] });
+    };
+    let pods = pods_of(&get(by_selector(&selector)).await?);
+    Ok(K8sPods { selector: Some(selector), pods })
 }
 
-fn parse_k8s_pods(object: &serde_json::Value) -> K8sPods {
-    let spec = &object["spec"];
-    let (selector, pod_specs) = match object["kind"].as_str() {
-        Some("List") => (None, object["items"].as_array().into_iter().flatten().map(|pod| &pod["spec"]).collect()),
-        Some("Pod") => (None, vec![spec]),
-        // Workloads: deployments, statefulsets, daemonsets, jobs, replicasets.
-        _ => (label_selector(&spec["selector"]), vec![&spec["template"]["spec"]]),
+/// The pods of a `kubectl get` answer: one pod, or a list of them.
+fn pods_of(object: &serde_json::Value) -> Vec<K8sPod> {
+    let pods: Vec<&serde_json::Value> = match object["kind"].as_str() {
+        Some("List") => object["items"].as_array().into_iter().flatten().collect(),
+        _ => vec![object],
     };
-    let mut containers: Vec<String> = Vec::new();
-    for pod in pod_specs {
-        // Init containers run before the others and end, except native
-        // sidecars, which keep running next to them.
-        let sidecars = pod["initContainers"].as_array().into_iter().flatten().filter(|c| c["restartPolicy"] == "Always");
-        let names = pod["containers"].as_array().into_iter().flatten().chain(sidecars).filter_map(|c| c["name"].as_str());
-        for name in names {
-            if !containers.iter().any(|c| c == name) {
-                containers.push(name.to_owned());
+    pods.into_iter()
+        .map(|pod| {
+            let spec = &pod["spec"];
+            // Init containers run before the others and end, except native
+            // sidecars, which keep running next to them.
+            let sidecars =
+                spec["initContainers"].as_array().into_iter().flatten().filter(|c| c["restartPolicy"] == "Always");
+            let containers = spec["containers"].as_array().into_iter().flatten().chain(sidecars);
+            K8sPod {
+                name: pod["metadata"]["name"].as_str().unwrap_or_default().to_owned(),
+                containers: containers.filter_map(|c| c["name"].as_str()).map(Into::into).collect(),
             }
-        }
-    }
-    K8sPods { selector, containers }
+        })
+        .collect()
 }
 
 /// A workload's `spec.selector` as a `kubectl --selector` argument.
@@ -245,7 +262,7 @@ mod tests {
     }
 
     #[test]
-    fn k8s_target_and_selector() {
+    fn k8s_follows_all_containers_with_prefixes() {
         let t = |target: &str| K8sTarget {
             target: target.into(),
             namespace: Some("prod".into()),
@@ -255,20 +272,22 @@ mod tests {
             pods: None,
         };
         assert_eq!(
-            k8s(t("deploy/api"), 10)(None).join(" "),
-            "kubectl --context orbstack logs --namespace prod --follow --tail=10 deploy/api --timestamps"
+            k8s(t("pod/x"), 10)(None).join(" "),
+            "kubectl --context orbstack logs --namespace prod --follow --prefix --all-containers --tail=10 pod/x --timestamps"
         );
         assert_eq!(
             k8s(t("app=api"), 10)(since()).join(" "),
-            "kubectl --context orbstack logs --namespace prod --follow --since-time=2026-10-17T12:00:00.000Z \
-             --selector app=api --prefix --max-log-requests=50 --timestamps"
+            "kubectl --context orbstack logs --namespace prod --follow --prefix --all-containers \
+             --since-time=2026-10-17T12:00:00.000Z --selector app=api --max-log-requests=100 --timestamps"
         );
         let workload = K8sTarget { pods: Some("app=api".into()), container: Some("app".into()), ..t("deploy/api") };
         assert_eq!(
             k8s(workload, 10)(None).join(" "),
-            "kubectl --context orbstack logs --namespace prod --follow --container app --tail=10 \
-             --selector app=api --prefix --max-log-requests=50 --timestamps"
+            "kubectl --context orbstack logs --namespace prod --follow --prefix --container app --tail=10 \
+             --selector app=api --max-log-requests=100 --timestamps"
         );
+        let all = K8sTarget { args: vec!["--all-containers=true".into()], ..t("pod/x") };
+        assert_eq!(k8s(all, 1)(None).iter().filter(|a| a.starts_with("--all-containers")).count(), 1);
     }
 
     #[test]
@@ -279,34 +298,26 @@ mod tests {
     }
 
     #[test]
-    fn k8s_pods_of_workloads_pods_and_lists() {
-        let deploy = serde_json::json!({
-            "kind": "Deployment",
+    fn k8s_selectors_and_pods() {
+        let selector = serde_json::json!({
+            "matchLabels": {"app": "shop"},
+            "matchExpressions": [{"key": "tier", "operator": "In", "values": ["web", "api"]}, {"key": "canary", "operator": "DoesNotExist"}]
+        });
+        assert_eq!(label_selector(&selector).as_deref(), Some("app=shop,tier in (web,api),!canary"));
+        assert_eq!(label_selector(&serde_json::json!(null)), None);
+
+        let pod = |name: &str| serde_json::json!({
+            "kind": "Pod",
+            "metadata": {"name": name},
             "spec": {
-                "selector": {
-                    "matchLabels": {"app": "shop"},
-                    "matchExpressions": [{"key": "tier", "operator": "In", "values": ["web", "api"]}, {"key": "canary", "operator": "DoesNotExist"}]
-                },
-                "template": {"spec": {
-                    "initContainers": [{"name": "migrate"}, {"name": "shipper", "restartPolicy": "Always"}],
-                    "containers": [{"name": "app"}, {"name": "proxy"}]
-                }}
+                "initContainers": [{"name": "migrate"}, {"name": "shipper", "restartPolicy": "Always"}],
+                "containers": [{"name": "app"}, {"name": "proxy"}]
             }
         });
-        assert_eq!(
-            parse_k8s_pods(&deploy),
-            K8sPods {
-                selector: Some("app=shop,tier in (web,api),!canary".into()),
-                containers: vec!["app".into(), "proxy".into(), "shipper".into()]
-            }
-        );
-        let pod = serde_json::json!({"kind": "Pod", "spec": {"containers": [{"name": "shell"}, {"name": "tcpdump"}]}});
-        assert_eq!(parse_k8s_pods(&pod), K8sPods { selector: None, containers: vec!["shell".into(), "tcpdump".into()] });
-        let list = serde_json::json!({"kind": "List", "items": [
-            {"spec": {"containers": [{"name": "app"}]}},
-            {"spec": {"containers": [{"name": "app"}, {"name": "debug"}]}}
-        ]});
-        assert_eq!(parse_k8s_pods(&list).containers, ["app", "debug"]);
+        let shop = |name: &str| K8sPod { name: name.into(), containers: vec!["app".into(), "proxy".into(), "shipper".into()] };
+        assert_eq!(pods_of(&pod("shop-1")), [shop("shop-1")]);
+        let list = serde_json::json!({"kind": "List", "items": [pod("shop-1"), pod("shop-2")]});
+        assert_eq!(pods_of(&list), [shop("shop-1"), shop("shop-2")]);
     }
 
     #[test]

@@ -66,10 +66,14 @@ async fn main() -> Result<()> {
     let mut app = App::new(panes, library, settings.history, settings.strip_ansi);
     for ((pane, config), tail) in app.panes.iter_mut().zip(&sources).zip(tails) {
         pane.level = settings.level.or(config.level);
-        pane.pod_prefix = config.prefixes_pods();
         pane.buffer.grow(tail.unwrap_or(0));
     }
-    app.start_solo();
+    for (feed, config) in sources.iter().enumerate() {
+        if let SourceSpec::K8s { running, .. } = &config.spec {
+            app.set_pods(feed, running.clone());
+        }
+    }
+    app.start();
     // `init` also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     let result = app::run(&mut terminal, &mut app, rx).await;

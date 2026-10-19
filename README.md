@@ -31,13 +31,13 @@ Sources:
 | `cmd:'command'` | stdout and stderr of a shell command |
 | `docker:container` or `d:container` | `docker logs --follow` of a container |
 | `compose:` / `compose:web,db` (or `dc:…`) | a compose project, one pane per service |
-| `k8s:deploy/api [-n ns] [--context ctx] [-c container] [kubectl args]` | `kubectl logs --follow`: one pane per container, with all the pods of a workload (or of a label selector, `k8s:app=api`) merged in it, each line behind a badge naming its pod |
+| `k8s:deploy/api [-n ns] [--context ctx] [-c container] [kubectl args]` | `kubectl logs --follow` of all the pods of a workload (or of a label selector, `k8s:app=api`, or a pod) and all their containers, in a pane you can split into pods, then containers |
 | `journal:` / `journal:nginx` | the systemd journal, or one unit |
 | `-` | omnitail's stdin (`make 2>&1 \| omnitail - app.log`) |
 
 Container sources (docker, compose, k8s) restart when their stream ends, resuming where it stopped.
 
-A k8s source looks at what its target runs when omnitail starts. Each container gets its own pane (native sidecars included, init containers left out), unless one is chosen (`-c app`) or `--all-containers` is passed. The pods of a deployment, statefulset or daemonset are followed together: replicas share a pane, and each line starts with its pod's badge (`xk2p9`, the end of a replica's name), with the same color in every pane. `e` filters on badges too. [`demo-k8s/`](demo-k8s) has workloads covering these cases.
+A k8s source looks at the pods its target runs when omnitail starts, and follows them all, with all their containers (native sidecars included, init containers left out; `-c app` picks one). Its pane mixes them, each line behind badges naming its pod (`xk2p9`, the end of a replica's name, one color per pod everywhere) and its container. `Enter` splits a pane into one pane per pod, then a pod's pane into one per container; `Backspace` goes back up. A single k8s source opens on its pods already (or its containers, for a single pod). Formats are guessed per container, so a pane mixing JSON and access logs colors both. `e` filters on pods and containers too. [`demo-k8s/`](demo-k8s) has workloads covering these cases.
 
 Without any source, omnitail follows the compose project of the current directory (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`), one pane per service. With a single source, it opens straight on its full-screen history (see [Keys](#keys)), following the end like `tail -f`; `q` quits.
 
@@ -89,6 +89,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `C` / `c` | omnitail's coloring on/off for all panes / one pane |
 | `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none`, or any scheme) |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
+| `Enter` / `Backspace` | split a k8s pane into its pods, then a pod into its containers / back up |
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
 

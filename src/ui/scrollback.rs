@@ -96,12 +96,12 @@ impl Painter<'_> {
         if self.view.is_merged() {
             prefix.extend(super::badge(format!("{:>2} ", line.pane + 1), line.pane));
         }
-        prefix.extend(super::origin_badge(line.entry));
         let pane = &self.panes[line.pane];
+        prefix.extend(super::origin_badges(line.entry, pane.badges));
         let render = Render {
             width: self.width,
             strip: self.opts.strip,
-            scheme: pane.color.active(),
+            scheme: pane.scheme_for(line.entry),
             wrap: self.opts.wrap,
             hscroll: self.hscroll,
             highlight: self.highlight,

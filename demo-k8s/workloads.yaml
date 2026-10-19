@@ -5,13 +5,14 @@
 #   kubectl apply -f demo-k8s/workloads.yaml
 #   kubectl delete -f demo-k8s/workloads.yaml    # when done
 #
-# omnitail gives one pane per container, and merges a workload's pods in it,
-# each line behind a badge naming its pod:
-#   omnitail 'k8s:deploy/api -n omnitaildemo'                                 # 1 pane
-#   omnitail 'k8s:deploy/api -n omnitaildemo' 'k8s:deploy/worker -n omnitaildemo'   # 2
-#   omnitail 'k8s:deploy/shop -n omnitaildemo'                                # 3 (app, proxy, shipper)
-#   omnitail -c demo-k8s/stack.toml                                           # shop + billing: 6
-#   omnitail 'k8s:sts/db -n omnitaildemo' 'k8s:debug -n omnitaildemo'        # db-0/db-1 badges; shell, tcpdump
+# A k8s source follows all its pods and containers, each line behind badges
+# naming them. Enter splits a pane into pods, then a pod into containers;
+# Backspace goes back up.
+#   omnitail 'k8s:deploy/api -n omnitaildemo'           # opens on its 3 pods
+#   omnitail 'k8s:deploy/shop -n omnitaildemo'          # 3 pods, Enter on one: app, proxy, shipper
+#   omnitail 'k8s:debug -n omnitaildemo'                # a single pod: its 2 containers
+#   omnitail -c demo-k8s/stack.toml                     # shop + billing: 2 panes, then split
+#   omnitail 'k8s:sts/db -n omnitaildemo' 'k8s:deploy/worker -n omnitaildemo'
 #
 # | Workload       | Pods | Containers                    | Case                        |
 # |----------------|------|-------------------------------|-----------------------------|

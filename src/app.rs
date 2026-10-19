@@ -14,6 +14,7 @@ use tokio::sync::mpsc;
 use std::collections::HashMap;
 
 use crate::buffer::{Buffer, Entry, Origin, Seq};
+use crate::spec::K8sPod;
 use crate::color::{Choice, FALLBACK, Library, PaneColor, Scheme};
 use crate::level::Level;
 use crate::pattern::Pattern;
@@ -35,12 +36,105 @@ pub struct Pane {
     pub filter: Option<Pattern>,
     /// Lowest level shown (`L`/`l`); lines with no known level always are.
     pub level: Option<Level>,
-    /// Lines start with their pod (`[pod/name/container] `), turned into
-    /// a badge.
-    pub pod_prefix: bool,
+    /// The source feeding the pane, and which of its lines it gets.
+    pub feed: SourceId,
+    pub scope: Scope,
+    /// What a line's badges say in this pane.
+    pub badges: Badges,
+    /// Format detection per container, for panes mixing them.
+    pub by_container: HashMap<Arc<str>, PaneColor>,
+}
+
+/// The lines of a source a pane gets: all of them, a pod's, or a container's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Scope {
+    All,
+    Pod(Arc<str>),
+    Container(Arc<str>, Arc<str>),
+}
+
+impl Scope {
+    fn accepts(&self, origin: Option<&Origin>) -> bool {
+        match (self, origin) {
+            (Scope::All, _) => true,
+            (Scope::Pod(pod), Some(o)) => o.pod == *pod,
+            (Scope::Container(pod, c), Some(o)) => o.pod == *pod && o.container == *c,
+            _ => false,
+        }
+    }
+}
+
+/// Which badges lines get in a pane: their pod's when it shows several,
+/// their container's (padded to `width`) when it mixes them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Badges {
+    pub pod: bool,
+    pub container: Option<usize>,
+}
+
+/// What the app knows of a source: its pods, when it has some.
+pub struct Feed {
+    pub name: String,
+    /// Lines carry their pod and container (`kubectl logs --prefix`).
+    pub pods_prefixed: bool,
+    /// Pods found at start, with their containers.
+    pub pods: Vec<K8sPod>,
 }
 
 impl Pane {
+    fn new(name: String, color: PaneColor, history: usize, feed: SourceId) -> Self {
+        Self {
+            name,
+            status: None,
+            restarts: 0,
+            color,
+            buffer: Buffer::new(history),
+            paused: None,
+            filter: None,
+            level: None,
+            feed,
+            scope: Scope::All,
+            badges: Badges::default(),
+            by_container: HashMap::new(),
+        }
+    }
+
+    /// The scheme for `entry`: the pane's own, or when it mixes containers
+    /// and guesses formats, the one guessed for the entry's container.
+    pub fn scheme_for(&self, entry: &Entry) -> Option<&Scheme> {
+        let guessed = entry.origin.as_ref().filter(|_| self.color.choice == "auto").and_then(|o| self.by_container.get(&o.container));
+        match guessed {
+            Some(color) if self.color.enabled => color.scheme.as_deref(),
+            _ => self.color.active(),
+        }
+    }
+
+    /// Feeds a line to format detection.
+    fn observe(&mut self, text: &str, origin: Option<&Origin>, library: &Library) {
+        self.color.observe(text, library);
+        if let (Some(o), Some(_)) = (origin, self.badges.container) {
+            if !self.by_container.contains_key(&o.container)
+                && let Ok(color) = PaneColor::new(Choice::Auto, library, true)
+            {
+                self.by_container.insert(o.container.clone(), color);
+            }
+            if let Some(color) = self.by_container.get_mut(&o.container) {
+                color.observe(text, library);
+            }
+        }
+    }
+
+    /// Stores a line that arrived, its level read or inherited.
+    fn receive(&mut self, mut entry: Entry, stated: Option<Level>, library: &Library) -> Seq {
+        self.observe(&entry.text, entry.origin.as_ref(), library);
+        let seq = self.buffer.end_seq();
+        // A line without a level (a stack trace, a wrapped message)
+        // belongs with the line before it.
+        entry.level = stated.or_else(|| seq.checked_sub(1).and_then(|s| self.buffer.entry(s)).and_then(|e| e.level));
+        self.buffer.push_entry(entry);
+        seq
+    }
+
     /// One past the last line the pane shows.
     pub fn view_end(&self) -> Seq {
         self.paused.unwrap_or(self.buffer.end_seq()).min(self.buffer.end_seq())
@@ -62,6 +156,7 @@ impl Pane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectPurpose {
     Scrollback,
+    Split,
     Clear,
     Color,
     Pause,
@@ -247,8 +342,15 @@ pub struct App {
     pub clipboard: Option<String>,
     /// Arrival rank of the next line, across all sources.
     arrival: u64,
-    /// Badges given so far, by pod name: a pod keeps its color everywhere.
-    origins: HashMap<String, Origin>,
+    /// One per source, by `SourceId`.
+    pub feeds: Vec<Feed>,
+    /// Screens left by splitting a pane (`Enter`), restored by `Backspace`.
+    /// Their panes keep receiving lines.
+    pub stack: Vec<Vec<Pane>>,
+    /// Badge colors given so far, by pod and by container name: each keeps
+    /// its color everywhere.
+    pod_colors: HashMap<Arc<str>, usize>,
+    container_colors: HashMap<Arc<str>, usize>,
     library: Arc<Library>,
 }
 
@@ -258,22 +360,12 @@ const HSCROLL_STEP: usize = 8;
 impl App {
     /// One pane per `(name, color)`, in source order.
     pub fn new(panes: Vec<(String, PaneColor)>, library: Arc<Library>, history: usize, strip_ansi: bool) -> Self {
-        let panes = panes
-            .into_iter()
-            .map(|(name, color)| Pane {
-                name,
-                status: None,
-                restarts: 0,
-                color,
-                buffer: Buffer::new(history),
-                paused: None,
-                filter: None,
-                level: None,
-                pod_prefix: false,
-            })
-            .collect();
+        let feeds = panes.iter().map(|(name, _)| Feed { name: name.clone(), pods_prefixed: false, pods: vec![] }).collect();
+        let panes = panes.into_iter().enumerate().map(|(i, (name, color))| Pane::new(name, color, history, i)).collect();
         Self {
             panes,
+            feeds,
+            stack: Vec::new(),
             mode: Mode::Panes,
             strip_ansi,
             wrap: true,
@@ -287,7 +379,8 @@ impl App {
             notice: None,
             clipboard: None,
             arrival: 0,
-            origins: HashMap::new(),
+            pod_colors: HashMap::new(),
+            container_colors: HashMap::new(),
             library,
         }
     }
@@ -304,7 +397,7 @@ impl App {
     }
 
     /// With a single source, opens straight on its history, following the end.
-    pub fn start_solo(&mut self) {
+    fn start_solo(&mut self) {
         if let [pane] = &self.panes[..] {
             self.solo = true;
             self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(0), pane.filter.clone(), pane.level));
@@ -316,31 +409,51 @@ impl App {
         self.library.resolve(&[name.into()]).ok()
     }
 
+    /// Declares the pods a source runs: its lines carry their pod and
+    /// container, and its panes can be split into them (`Enter`).
+    pub fn set_pods(&mut self, feed: SourceId, pods: Vec<K8sPod>) {
+        self.feeds[feed].pods_prefixed = true;
+        self.feeds[feed].pods = pods;
+        let badges = self.badges(feed, &Scope::All);
+        self.panes.iter_mut().filter(|p| p.feed == feed).for_each(|p| p.badges = badges);
+    }
+
     pub fn ingest(&mut self, id: SourceId, event: SourceEvent) {
-        let Some(pane) = self.panes.get_mut(id) else { return };
+        let Some(feed) = self.feeds.get(id) else { return };
         match event {
             SourceEvent::Line(mut text) => {
                 let mut origin = None;
-                if pane.pod_prefix
-                    && let Some((pod, rest)) = split_pod_prefix(&text)
+                if feed.pods_prefixed
+                    && let Some((pod, container, rest)) = split_pod_prefix(&text)
                 {
-                    let count = self.origins.len();
-                    let badge = self.origins.entry(pod.to_owned()).or_insert_with(|| Origin { name: pod_badge(pod).into(), color: count });
-                    origin = Some(badge.clone());
+                    // `--all-containers` includes init containers, which are
+                    // left out (native sidecars are listed with the others).
+                    let listed = feed.pods.iter().find(|p| p.name == pod);
+                    if listed.is_some_and(|p| !p.containers.iter().any(|c| c == container)) {
+                        return;
+                    }
+                    origin = Some(self.origin(pod, container));
                     text = rest.to_owned();
                 }
-                pane.color.observe(&text, &self.library);
-                let seq = pane.buffer.end_seq();
                 let stated = if text.contains('\x1b') {
                     crate::level::detect(&crate::ui::plain_text(&text))
                 } else {
                     crate::level::detect(&text)
                 };
-                // A line without a level (a stack trace, a wrapped message)
-                // belongs with the line before it.
-                let level = stated.or_else(|| seq.checked_sub(1).and_then(|s| pane.buffer.entry(s)).and_then(|e| e.level));
-                pane.buffer.push_entry(Entry { text, arrival: self.arrival, at: Local::now(), level, origin });
+                let entry = Entry { text, arrival: self.arrival, at: Local::now(), level: None, origin };
                 self.arrival += 1;
+                // Panes of the screens left by a split keep up too.
+                for pane in self.stack.iter_mut().flatten() {
+                    if pane.feed == id && pane.scope.accepts(entry.origin.as_ref()) {
+                        pane.receive(entry.clone(), stated, &self.library);
+                    }
+                }
+                let mut received = Vec::new();
+                for (i, pane) in self.panes.iter_mut().enumerate() {
+                    if pane.feed == id && pane.scope.accepts(entry.origin.as_ref()) {
+                        received.push((i, pane.receive(entry.clone(), stated, &self.library)));
+                    }
+                }
                 // An open merged view follows arrivals as they come.
                 let merged = match &mut self.mode {
                     Mode::Scrollback(sb) => Some(&mut sb.target),
@@ -348,21 +461,165 @@ impl App {
                     _ => None,
                 };
                 if let Some(Target::Merged(m)) = merged {
-                    m.push(id, seq, &self.panes);
+                    for (pane, seq) in received {
+                        m.push(pane, seq, &self.panes);
+                    }
                 }
             }
             SourceEvent::Reset(reason) => {
-                tracing::info!(source = %pane.name, reason, "reset");
-                pane.buffer.clear_view(Local::now(), reason);
+                tracing::info!(source = %feed.name, reason, "reset");
+                let now = Local::now();
+                for pane in self.panes.iter_mut().chain(self.stack.iter_mut().flatten()).filter(|p| p.feed == id) {
+                    pane.buffer.clear_view(now, reason);
+                }
             }
             SourceEvent::Status(status) => {
-                tracing::info!(source = %pane.name, %status);
-                let was_down = matches!(pane.status, Some(SourceStatus::Exited(_) | SourceStatus::Error(_)));
-                if was_down && status == SourceStatus::Running {
-                    pane.restarts += 1;
+                tracing::info!(source = %feed.name, %status);
+                for pane in self.panes.iter_mut().chain(self.stack.iter_mut().flatten()).filter(|p| p.feed == id) {
+                    let was_down = matches!(pane.status, Some(SourceStatus::Exited(_) | SourceStatus::Error(_)));
+                    if was_down && status == SourceStatus::Running {
+                        pane.restarts += 1;
+                    }
+                    pane.status = Some(status.clone());
                 }
-                pane.status = Some(status);
             }
+        }
+    }
+
+    /// The origin of a line from `pod`'s `container`, with the colors of
+    /// their badges.
+    fn origin(&mut self, pod: &str, container: &str) -> Origin {
+        fn color(colors: &mut HashMap<Arc<str>, usize>, name: &str) -> (Arc<str>, usize) {
+            if let Some((name, &color)) = colors.get_key_value(name) {
+                return (name.clone(), color);
+            }
+            let (name, color): (Arc<str>, usize) = (name.into(), colors.len());
+            colors.insert(name.clone(), color);
+            (name, color)
+        }
+        let (pod_name, pod_color) = color(&mut self.pod_colors, pod);
+        let (container, container_color) = color(&mut self.container_colors, container);
+        Origin { badge: pod_badge(pod).into(), pod: pod_name, color: pod_color, container, container_color }
+    }
+
+    /// The badges lines need in a pane of `feed` showing `scope`.
+    fn badges(&self, feed: SourceId, scope: &Scope) -> Badges {
+        let f = &self.feeds[feed];
+        if !f.pods_prefixed {
+            return Badges::default();
+        }
+        let mut containers: Vec<&str> = Vec::new();
+        for pod in f.pods.iter().filter(|p| match scope {
+            Scope::Pod(name) => *p.name == **name,
+            _ => true,
+        }) {
+            for c in &pod.containers {
+                if !containers.contains(&c.as_str()) {
+                    containers.push(c);
+                }
+            }
+        }
+        let mixed = !matches!(scope, Scope::Container(..)) && containers.len() != 1;
+        Badges {
+            pod: *scope == Scope::All && f.pods.len() != 1,
+            // Unknown containers (none found at start) get a default width.
+            container: mixed.then(|| containers.iter().map(|c| c.chars().count()).max().unwrap_or(8)),
+        }
+    }
+
+    /// The panes `pane` splits into: its pods, or a pod's containers. A
+    /// level with a single entry is skipped (one pod: its containers).
+    fn children(&self, pane: &Pane) -> Vec<Pane> {
+        let feed = &self.feeds[pane.feed];
+        if !feed.pods_prefixed {
+            return Vec::new();
+        }
+        let mut scope = pane.scope.clone();
+        loop {
+            let mut next: Vec<Scope> = Vec::new();
+            let mut add = |s: Scope| {
+                if !next.contains(&s) {
+                    next.push(s);
+                }
+            };
+            let seen = pane.buffer.entries().filter_map(|(_, e)| e.origin.as_ref());
+            match &scope {
+                Scope::All => {
+                    feed.pods.iter().for_each(|p| add(Scope::Pod(p.name.as_str().into())));
+                    seen.for_each(|o| add(Scope::Pod(o.pod.clone())));
+                }
+                Scope::Pod(pod) => {
+                    let listed = feed.pods.iter().filter(|p| *p.name == **pod).flat_map(|p| &p.containers);
+                    listed.for_each(|c| add(Scope::Container(pod.clone(), c.as_str().into())));
+                    seen.filter(|o| o.pod == *pod).for_each(|o| add(Scope::Container(pod.clone(), o.container.clone())));
+                }
+                Scope::Container(..) => {}
+            }
+            match &next[..] {
+                [only] => scope = only.clone(),
+                _ => return next.into_iter().map(|s| self.child(pane, s)).collect(),
+            }
+        }
+    }
+
+    /// A pane showing `scope` of `parent`'s lines, starting with those it
+    /// already has, and with its filter, level and scheme.
+    fn child(&self, parent: &Pane, scope: Scope) -> Pane {
+        let choice = match parent.color.choice.as_str() {
+            "auto" => Choice::Auto,
+            "none" => Choice::Off,
+            name => Choice::Named(vec![name.into(), FALLBACK.into()]),
+        };
+        let color = PaneColor::new(choice, &self.library, parent.color.enabled)
+            .or_else(|_| PaneColor::new(Choice::Off, &self.library, false))
+            .expect("no coloring cannot fail");
+        let feed = &self.feeds[parent.feed];
+        let name = match &scope {
+            Scope::All => feed.name.clone(),
+            Scope::Pod(pod) => format!("{} › {}", feed.name, pod_badge(pod)),
+            Scope::Container(pod, c) => format!("{} › {} › {c}", feed.name, pod_badge(pod)),
+        };
+        let mut pane = Pane::new(name, color, parent.buffer.capacity(), parent.feed);
+        pane.status = parent.status.clone();
+        pane.restarts = parent.restarts;
+        pane.filter = parent.filter.clone();
+        pane.level = parent.level;
+        pane.badges = self.badges(parent.feed, &scope);
+        pane.scope = scope;
+        let scope = pane.scope.clone();
+        for (_, entry) in parent.buffer.entries().filter(|(_, e)| scope.accepts(e.origin.as_ref())) {
+            pane.observe(&entry.text, entry.origin.as_ref(), &self.library);
+            pane.buffer.push_entry(entry.clone());
+        }
+        pane
+    }
+
+    /// Splits pane `index` into its pods or containers (`Enter`).
+    fn split(&mut self, index: usize) {
+        let children = self.children(&self.panes[index]);
+        if children.is_empty() {
+            self.notice = Some(format!("pane {}: nothing to split it into", index + 1));
+            return;
+        }
+        self.stack.push(std::mem::replace(&mut self.panes, children));
+    }
+
+    /// Back to the screen before the last split (`Backspace`).
+    fn unsplit(&mut self) {
+        match self.stack.pop() {
+            Some(panes) => self.panes = panes,
+            None => self.notice = Some("not split: Enter splits a pane into its pods, then containers".into()),
+        }
+    }
+
+    /// The first screen: a single source with pods opens on them (or on
+    /// its containers, for a single pod); any other single source opens
+    /// on its history.
+    pub fn start(&mut self) {
+        if self.panes.len() == 1 && !self.children(&self.panes[0]).is_empty() {
+            self.split(0);
+        } else {
+            self.start_solo();
         }
     }
 
@@ -521,6 +778,8 @@ impl App {
                 self.prompt = Some(Prompt::new(PromptKind::Highlight, input));
             }
             KeyCode::Char('w') => self.wrap = !self.wrap,
+            KeyCode::Enter => self.select(SelectPurpose::Split),
+            KeyCode::Backspace => self.unsplit(),
             _ => {}
         }
     }
@@ -819,6 +1078,7 @@ impl App {
         self.mode = Mode::Panes;
         match purpose {
             SelectPurpose::Clear => self.panes[pane].buffer.clear_view(Local::now(), "cleared"),
+            SelectPurpose::Split => self.split(pane),
             SelectPurpose::Scrollback => {
                 let p = &self.panes[pane];
                 self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(pane), p.filter.clone(), p.level));
@@ -845,12 +1105,12 @@ impl App {
     }
 }
 
-/// The pod and the line of `kubectl logs --prefix` output
+/// The pod, the container and the line of `kubectl logs --prefix` output
 /// (`[pod/api-7f9c8d6b5-xk2p9/app] message`).
-fn split_pod_prefix(line: &str) -> Option<(&str, &str)> {
+fn split_pod_prefix(line: &str) -> Option<(&str, &str, &str)> {
     let (inner, text) = line.strip_prefix("[pod/")?.split_once(']')?;
-    let (pod, _container) = inner.split_once('/')?;
-    Some((pod, text.strip_prefix(' ').unwrap_or(text)))
+    let (pod, container) = inner.split_once('/')?;
+    Some((pod, container, text.strip_prefix(' ').unwrap_or(text)))
 }
 
 /// A pod's badge: the random suffix of a replica (`api-7f9c8d6b5-xk2p9` →
@@ -1136,30 +1396,122 @@ mod tests {
         assert!(matches!(a.mode, Mode::Scrollback(_)), "not in the merged view");
     }
 
+    fn pods(names: &[&str], containers: &[&str]) -> Vec<K8sPod> {
+        let containers: Vec<String> = containers.iter().map(|c| c.to_string()).collect();
+        names.iter().map(|n| K8sPod { name: n.to_string(), containers: containers.clone() }).collect()
+    }
+
+    /// One k8s source with `pods`, a line from each pod and container.
+    fn shop(pods: Vec<K8sPod>) -> App {
+        let mut a = App::with_names(&["k8s:deploy/shop"]);
+        a.set_pods(0, pods.clone());
+        for pod in &pods {
+            for c in &pod.containers {
+                a.ingest(0, line(&format!("[pod/{}/{c}] {c} of {}", pod.name, pod.name)));
+            }
+        }
+        a
+    }
+
+    fn texts(pane: &Pane) -> Vec<String> {
+        pane.buffer.entries().map(|(_, e)| e.text.clone()).collect()
+    }
+
     #[test]
-    fn pod_prefixes_become_badges() {
-        assert_eq!(split_pod_prefix("[pod/api-7f9c8d6b5-xk2p9/app] hello"), Some(("api-7f9c8d6b5-xk2p9", "hello")));
-        assert_eq!(split_pod_prefix("[pod/db-0/db] "), Some(("db-0", "")));
+    fn pod_prefixes_become_origins() {
+        assert_eq!(split_pod_prefix("[pod/api-7f9c8d6b5-xk2p9/app] hello"), Some(("api-7f9c8d6b5-xk2p9", "app", "hello")));
+        assert_eq!(split_pod_prefix("[pod/db-0/db] "), Some(("db-0", "db", "")));
         assert_eq!(split_pod_prefix("[INFO] hello"), None);
         assert_eq!((pod_badge("api-7f9c8d6b5-xk2p9"), pod_badge("db-0"), pod_badge("debug")), ("xk2p9", "db-0", "debug"));
 
-        let mut a = App::with_names(&["shop · app", "shop · proxy"]);
-        a.panes.iter_mut().for_each(|p| p.pod_prefix = true);
+        let mut a = App::with_names(&["k8s:deploy/shop", "plain"]);
+        a.set_pods(0, pods(&["shop-5d8-aaaaa", "shop-5d8-bbbbb"], &["app", "proxy"]));
         a.ingest(0, line(r#"[pod/shop-5d8-aaaaa/app] {"level":"error","msg":"boom"}"#));
-        a.ingest(0, line("[pod/shop-5d8-bbbbb/app] fine"));
-        a.ingest(1, line("[pod/shop-5d8-bbbbb/proxy] GET /"));
+        a.ingest(0, line("[pod/shop-5d8-bbbbb/proxy] GET /"));
+        a.ingest(1, line("[pod/x/y] not a k8s source"));
         let entry = |pane: usize, seq| a.panes[pane].buffer.entry(seq).unwrap().clone();
-        let (first, second, proxy) = (entry(0, 0), entry(0, 1), entry(1, 0));
+        let (first, second) = (entry(0, 0), entry(0, 1));
         assert_eq!(first.text, r#"{"level":"error","msg":"boom"}"#, "the line itself, for formats and levels");
         assert_eq!(first.level, Some(Level::Error));
-        assert_eq!(first.origin.as_ref().map(|o| &*o.name), Some("aaaaa"));
-        assert_ne!(first.origin.as_ref().unwrap().color, second.origin.as_ref().unwrap().color);
-        assert_eq!(second.origin, proxy.origin, "a pod keeps its badge across panes");
+        let o = first.origin.as_ref().unwrap();
+        assert_eq!((&*o.pod, &*o.badge, &*o.container), ("shop-5d8-aaaaa", "aaaaa", "app"));
+        assert_ne!(o.color, second.origin.as_ref().unwrap().color);
+        assert_eq!(entry(1, 0).text, "[pod/x/y] not a k8s source");
+        assert_eq!(a.panes[0].badges, Badges { pod: true, container: Some(5) });
 
         a.panes[0].filter = Some(Pattern::parse("bbbbb", true).unwrap());
-        assert!(!a.panes[0].shows(&first) && a.panes[0].shows(&second), "e filters on the badge");
-        a.panes[0].filter = Some(Pattern::parse("!bbbbb", true).unwrap());
-        assert!(a.panes[0].shows(&first) && !a.panes[0].shows(&second));
+        assert!(!a.panes[0].shows(&first) && a.panes[0].shows(&second), "e filters on the pod");
+        a.panes[0].filter = Some(Pattern::parse("!proxy", true).unwrap());
+        assert!(a.panes[0].shows(&first) && !a.panes[0].shows(&second), "and on the container");
+    }
+
+    #[test]
+    fn split_into_pods_then_containers_and_back() {
+        let mut a = shop(pods(&["shop-1-aaaaa", "shop-1-bbbbb", "shop-1-ccccc"], &["app", "proxy", "shipper"]));
+        a.start();
+        let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
+        assert_eq!(names, ["k8s:deploy/shop › aaaaa", "k8s:deploy/shop › bbbbb", "k8s:deploy/shop › ccccc"]);
+        assert_eq!(texts(&a.panes[1]), ["app of shop-1-bbbbb", "proxy of shop-1-bbbbb", "shipper of shop-1-bbbbb"]);
+        assert_eq!(a.panes[1].badges, Badges { pod: false, container: Some(7) });
+        assert!(matches!(a.mode, Mode::Panes) && !a.solo);
+
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('2'));
+        let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
+        assert_eq!(names, ["k8s:deploy/shop › bbbbb › app", "k8s:deploy/shop › bbbbb › proxy", "k8s:deploy/shop › bbbbb › shipper"]);
+        assert_eq!(texts(&a.panes[1]), ["proxy of shop-1-bbbbb"]);
+        assert_eq!(a.panes[1].badges, Badges::default());
+
+        a.ingest(0, line("[pod/shop-1-bbbbb/migrate] init containers are left out"));
+        a.ingest(0, line("[pod/shop-1-bbbbb/proxy] later"));
+        a.ingest(0, line("[pod/shop-1-aaaaa/app] elsewhere"));
+        assert_eq!(texts(&a.panes[1]), ["proxy of shop-1-bbbbb", "later"]);
+        press(&mut a, KeyCode::Backspace);
+        assert_eq!(a.panes.len(), 3);
+        assert_eq!(texts(&a.panes[1]).last().unwrap(), "later", "hidden panes kept up");
+        assert_eq!(texts(&a.panes[0]).last().unwrap(), "elsewhere");
+        press(&mut a, KeyCode::Backspace);
+        assert_eq!(a.panes.len(), 1);
+        assert_eq!(a.panes[0].buffer.len(), 11);
+        press(&mut a, KeyCode::Backspace);
+        assert!(a.notice.as_ref().unwrap().starts_with("not split"));
+    }
+
+    #[test]
+    fn single_pods_and_containers_are_skipped() {
+        let mut a = shop(pods(&["debug"], &["shell", "tcpdump"]));
+        a.start();
+        let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
+        assert_eq!(names, ["k8s:deploy/shop › debug › shell", "k8s:deploy/shop › debug › tcpdump"], "one pod: its containers");
+
+        let mut a = shop(pods(&["api-1-aaaaa", "api-1-bbbbb"], &["api"]));
+        assert_eq!(a.panes[0].badges, Badges { pod: true, container: None }, "one container: no container badge");
+        a.start();
+        assert_eq!(a.panes.len(), 2);
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('1'));
+        assert!(a.notice.as_ref().unwrap().contains("nothing to split"));
+
+        let mut a = shop(pods(&["db-0"], &["db"]));
+        a.start();
+        assert!(a.solo && a.stack.is_empty(), "nothing to split: a single source opens on its history");
+
+        let mut a = app(2);
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Enter);
+        assert!(a.notice.as_ref().unwrap().contains("nothing to split"), "not a k8s source");
+    }
+
+    #[test]
+    fn mixed_containers_get_their_own_format() {
+        let mut a = App::with_names(&["k8s:deploy/shop"]);
+        a.set_pods(0, pods(&["shop-1-aaaaa"], &["app", "proxy"]));
+        a.ingest(0, line(r#"[pod/shop-1-aaaaa/app] {"level":"info","msg":"x"}"#));
+        a.ingest(0, line(r#"[pod/shop-1-aaaaa/proxy] 10.0.0.1 - - [18/Oct/2026:14:25:25 +0000] "GET / HTTP/1.1" 200 1 "-" "curl""#));
+        let pane = &a.panes[0];
+        let scheme = |seq| pane.scheme_for(pane.buffer.entry(seq).unwrap()).map(|s| s.name.clone());
+        assert_eq!(scheme(0).as_deref(), Some("json+generic"));
+        assert_eq!(scheme(1).as_deref(), Some("http+generic"));
     }
 
     #[test]

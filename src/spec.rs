@@ -44,6 +44,10 @@ pub enum SourceSpec {
         /// are followed together, each line tagged with its pod.
         #[serde(skip)]
         pods: Option<String>,
+        /// The pods running at start and their containers, which panes can
+        /// be split into.
+        #[serde(skip)]
+        running: Vec<K8sPod>,
     },
     /// systemd journal, of one unit or of everything.
     Journal {
@@ -51,6 +55,13 @@ pub enum SourceSpec {
         unit: Option<String>,
     },
     Stdin,
+}
+
+/// A pod and its long-running containers (native sidecars included).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct K8sPod {
+    pub name: String,
+    pub containers: Vec<String>,
 }
 
 impl FromStr for SourceSpec {
@@ -94,7 +105,7 @@ impl FromStr for SourceSpec {
                     };
                     *slot = Some(inline.or_else(|| words.next().map(Into::into)).ok_or(format!("{word} needs a value"))?);
                 }
-                Ok(SourceSpec::K8s { target, namespace, context, container, args, pods: None })
+                Ok(SourceSpec::K8s { target, namespace, context, container, args, pods: None, running: vec![] })
             }
             "journal" => Ok(SourceSpec::Journal { unit: Some(rest.trim()).filter(|u| !u.is_empty()).map(Into::into) }),
             // Something like `dokcer:x` is far more likely a typo than a file name.
@@ -182,11 +193,6 @@ impl SourceConfig {
             Some(SchemeRef::One(name)) => Choice::Named(vec![name.clone()]),
             Some(SchemeRef::Many(names)) => Choice::Named(names.clone()),
         }
-    }
-
-    /// Whether lines come prefixed with their pod (`kubectl logs --prefix`).
-    pub fn prefixes_pods(&self) -> bool {
-        matches!(&self.spec, SourceSpec::K8s { target, pods, .. } if pods.is_some() || target.contains('='))
     }
 
     pub fn restart(&self) -> bool {

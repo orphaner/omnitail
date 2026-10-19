@@ -10,6 +10,7 @@ use crate::app::{Pane, SchemeEntry, SchemePicker, SelectPurpose};
 pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: usize, panes: &[Pane]) {
     let title = match purpose {
         SelectPurpose::Scrollback => " Scrollback ",
+        SelectPurpose::Split => " Split into pods / containers ",
         SelectPurpose::Clear => " Clear ",
         SelectPurpose::Color => " Colors on/off ",
         SelectPurpose::Pause => " Pause/resume ",

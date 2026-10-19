@@ -28,6 +28,8 @@ pub const PANES: Section = Section {
         ("C c", "colors on/off: all / one pane"),
         ("s", "color scheme of a pane (filterable list)"),
         ("w", "wrap long lines, or cut them"),
+        ("Enter", "split a k8s pane: pods, then containers"),
+        ("Backspace", "back to the screen before the split"),
         ("h F1", "this help"),
         ("q Esc", "quit"),
         ("Ctrl+C", "quit, from anywhere"),

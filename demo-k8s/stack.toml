@@ -1,5 +1,6 @@
-# Two deployments of three pods with three containers each: six panes, the
-# three pods of each merged behind their badge. Needs demo-k8s/workloads.yaml
+# Two deployments of three pods with three containers each: one pane each,
+# all their pods and containers mixed behind badges; Enter splits one into
+# its pods, then a pod into its containers. Needs demo-k8s/workloads.yaml
 # applied (see its header).
 
 [[source]]

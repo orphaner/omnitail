@@ -576,8 +576,8 @@ impl App {
         let feed = &self.feeds[parent.feed];
         let name = match &scope {
             Scope::All => feed.name.clone(),
-            Scope::Pod(pod) => format!("{} › {}", feed.name, pod_badge(pod)),
-            Scope::Container(pod, c) => format!("{} › {} › {c}", feed.name, pod_badge(pod)),
+            Scope::Pod(pod) => format!("{} > {pod}", feed.name),
+            Scope::Container(pod, c) => format!("{} > {pod} > {c}", feed.name),
         };
         let mut pane = Pane::new(name, color, parent.buffer.capacity(), parent.feed);
         pane.status = parent.status.clone();
@@ -1403,7 +1403,7 @@ mod tests {
 
     /// One k8s source with `pods`, a line from each pod and container.
     fn shop(pods: Vec<K8sPod>) -> App {
-        let mut a = App::with_names(&["k8s:deploy/shop"]);
+        let mut a = App::with_names(&["k8s: shop > deploy/shop"]);
         a.set_pods(0, pods.clone());
         for pod in &pods {
             for c in &pod.containers {
@@ -1424,7 +1424,7 @@ mod tests {
         assert_eq!(split_pod_prefix("[INFO] hello"), None);
         assert_eq!((pod_badge("api-7f9c8d6b5-xk2p9"), pod_badge("db-0"), pod_badge("debug")), ("xk2p9", "db-0", "debug"));
 
-        let mut a = App::with_names(&["k8s:deploy/shop", "plain"]);
+        let mut a = App::with_names(&["k8s: shop > deploy/shop", "plain"]);
         a.set_pods(0, pods(&["shop-5d8-aaaaa", "shop-5d8-bbbbb"], &["app", "proxy"]));
         a.ingest(0, line(r#"[pod/shop-5d8-aaaaa/app] {"level":"error","msg":"boom"}"#));
         a.ingest(0, line("[pod/shop-5d8-bbbbb/proxy] GET /"));
@@ -1450,7 +1450,10 @@ mod tests {
         let mut a = shop(pods(&["shop-1-aaaaa", "shop-1-bbbbb", "shop-1-ccccc"], &["app", "proxy", "shipper"]));
         a.start();
         let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
-        assert_eq!(names, ["k8s:deploy/shop › aaaaa", "k8s:deploy/shop › bbbbb", "k8s:deploy/shop › ccccc"]);
+        assert_eq!(
+            names,
+            ["k8s: shop > deploy/shop > shop-1-aaaaa", "k8s: shop > deploy/shop > shop-1-bbbbb", "k8s: shop > deploy/shop > shop-1-ccccc"]
+        );
         assert_eq!(texts(&a.panes[1]), ["app of shop-1-bbbbb", "proxy of shop-1-bbbbb", "shipper of shop-1-bbbbb"]);
         assert_eq!(a.panes[1].badges, Badges { pod: false, container: Some(7) });
         assert!(matches!(a.mode, Mode::Panes) && !a.solo);
@@ -1458,7 +1461,14 @@ mod tests {
         press(&mut a, KeyCode::Enter);
         press(&mut a, KeyCode::Char('2'));
         let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
-        assert_eq!(names, ["k8s:deploy/shop › bbbbb › app", "k8s:deploy/shop › bbbbb › proxy", "k8s:deploy/shop › bbbbb › shipper"]);
+        assert_eq!(
+            names,
+            [
+                "k8s: shop > deploy/shop > shop-1-bbbbb > app",
+                "k8s: shop > deploy/shop > shop-1-bbbbb > proxy",
+                "k8s: shop > deploy/shop > shop-1-bbbbb > shipper"
+            ]
+        );
         assert_eq!(texts(&a.panes[1]), ["proxy of shop-1-bbbbb"]);
         assert_eq!(a.panes[1].badges, Badges::default());
 
@@ -1482,7 +1492,7 @@ mod tests {
         let mut a = shop(pods(&["debug"], &["shell", "tcpdump"]));
         a.start();
         let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
-        assert_eq!(names, ["k8s:deploy/shop › debug › shell", "k8s:deploy/shop › debug › tcpdump"], "one pod: its containers");
+        assert_eq!(names, ["k8s: shop > deploy/shop > debug > shell", "k8s: shop > deploy/shop > debug > tcpdump"], "one pod: its containers");
 
         let mut a = shop(pods(&["api-1-aaaaa", "api-1-bbbbb"], &["api"]));
         assert_eq!(a.panes[0].badges, Badges { pod: true, container: None }, "one container: no container badge");
@@ -1504,7 +1514,7 @@ mod tests {
 
     #[test]
     fn mixed_containers_get_their_own_format() {
-        let mut a = App::with_names(&["k8s:deploy/shop"]);
+        let mut a = App::with_names(&["k8s: shop > deploy/shop"]);
         a.set_pods(0, pods(&["shop-1-aaaaa"], &["app", "proxy"]));
         a.ingest(0, line(r#"[pod/shop-1-aaaaa/app] {"level":"info","msg":"x"}"#));
         a.ingest(0, line(r#"[pod/shop-1-aaaaa/proxy] 10.0.0.1 - - [18/Oct/2026:14:25:25 +0000] "GET / HTTP/1.1" 200 1 "-" "curl""#));

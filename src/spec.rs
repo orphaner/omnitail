@@ -130,15 +130,14 @@ impl fmt::Display for SourceSpec {
             SourceSpec::Docker { container } => write!(f, "docker:{container}"),
             SourceSpec::Compose { services, .. } if services.is_empty() => write!(f, "compose"),
             SourceSpec::Compose { services, .. } => write!(f, "compose:{}", services.join(",")),
-            SourceSpec::K8s { target, namespace, container, .. } => {
-                write!(f, "k8s:{target}")?;
-                if let Some(c) = container {
-                    write!(f, " · {c}")?;
-                }
-                match namespace {
-                    Some(ns) => write!(f, " -n {ns}"),
-                    None => Ok(()),
-                }
+            // `k8s: context > namespace > target > container`, from the
+            // widest to the narrowest, as panes split further.
+            SourceSpec::K8s { target, namespace, context, container, .. } => {
+                let path: Vec<&str> = [context.as_deref(), namespace.as_deref(), Some(target.as_str()), container.as_deref()]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                write!(f, "k8s: {}", path.join(" > "))
             }
             SourceSpec::Journal { unit: Some(unit) } => write!(f, "journal:{unit}"),
             SourceSpec::Journal { unit: None } => write!(f, "journal"),
@@ -257,7 +256,7 @@ mod tests {
         assert_eq!(target, "deploy/api");
         assert_eq!((namespace.as_deref(), context.as_deref(), container.as_deref()), (Some("prod"), Some("kind"), Some("app")));
         assert_eq!(args, &["--since=1h"]);
-        assert_eq!(spec.to_string(), "k8s:deploy/api · app -n prod");
+        assert_eq!(spec.to_string(), "k8s: kind > prod > deploy/api > app");
         assert!(parse("k8s:").is_err());
         assert!(parse("k8s:pod/x -n").is_err(), "a flag without its value");
     }

@@ -195,7 +195,7 @@ mod tests {
             compose.spec,
             SourceSpec::Compose { services: vec!["web".into()], file: Some("/abs/compose.yml".into()) }
         );
-        assert_eq!(k8s.title(), "k8s:app=api -n prod");
+        assert_eq!(k8s.title(), "k8s: prod > app=api");
         assert!(!k8s.restart());
     }
 

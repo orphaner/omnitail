@@ -23,9 +23,10 @@ pub struct Cli {
     #[arg(long, value_name = "N")]
     pub history: Option<usize>,
 
-    /// Existing lines shown when a source starts [default: enough to fill its pane].
+    /// Existing lines read when a source starts, kept in its history on top
+    /// of --history [default: enough to fill its pane].
     #[arg(short = 'n', long, value_name = "N")]
-    pub lines: Option<usize>,
+    pub tail: Option<usize>,
 
     /// Show only lines of this level and up, in every pane (trace, debug,
     /// info, warn, error; change it with L/l). Lines with no level stay.
@@ -61,7 +62,7 @@ mod tests {
     #[test]
     fn parses_sources_and_options() {
         let cli = Cli::try_parse_from(["omnitail", "-n", "50", "a.log", "cmd:ping x", "docker:db"]).unwrap();
-        assert_eq!(cli.lines, Some(50));
+        assert_eq!(cli.tail, Some(50));
         assert_eq!(cli.sources.len(), 3);
         assert_eq!(cli.sources[1], SourceSpec::Cmd { command: "ping x".into() });
         let cli = Cli::try_parse_from(["omnitail", "--level", "warn", "a.log"]).unwrap();

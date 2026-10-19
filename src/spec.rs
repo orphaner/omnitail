@@ -127,9 +127,10 @@ pub struct SourceConfig {
     /// Pane title, instead of the source description.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// Existing lines shown at start (default: fill the pane).
+    /// Existing lines read at start, kept on top of the history (default:
+    /// fill the pane).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub lines: Option<usize>,
+    pub tail: Option<usize>,
     /// Start the source again when it ends. Default: on for containers,
     /// whose log streams end whenever the container restarts.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -175,7 +176,7 @@ impl SourceConfig {
 
 impl From<SourceSpec> for SourceConfig {
     fn from(spec: SourceSpec) -> Self {
-        Self { spec, name: None, lines: None, restart: None, scheme: None, level: None }
+        Self { spec, name: None, tail: None, restart: None, scheme: None, level: None }
     }
 }
 

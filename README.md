@@ -39,7 +39,7 @@ Container sources (docker, compose, k8s) restart when their stream ends, resumin
 
 Without any source, omnitail follows the compose project of the current directory (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`), one pane per service. With a single source, it opens straight on its full-screen history (see [Keys](#keys)), following the end like `tail -f`; `q` quits.
 
-Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `lines`, `restart`, `scheme` and `level`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`. `--print-config` writes one from the command line, with one source per compose service, to edit from there: `omnitail --print-config > stack.toml`.
+Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `tail`, `restart`, `scheme` and `level`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`. `--print-config` writes one from the command line, with one source per compose service, to edit from there: `omnitail --print-config > stack.toml`.
 
 ## Colors
 
@@ -61,7 +61,7 @@ rules = [
 
 Styles are color names (red, green, yellow, blue, magenta, cyan, white, gray, orange, black), `0`-`255` or `#rrggbb`, plus `bold`, `dim`, `italic`, `underline` and `reverse`, with `fg:` and `bg:` prefixes. Where two rules match the same text, the first one wins. `--no-color` (or `color = false`) starts with coloring off.
 
-Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--level LEVEL` (see [Levels](#levels)), `--strip-ansi` (then omnitail colors those lines too), `--no-color`, `--print-config`, `--log-file PATH`.
+Options: `-c/--config PATH`, `-n/--tail N` (existing lines read at start, kept on top of the history; by default, enough to fill each pane), `--history N` (lines kept per source since omnitail started, 10,000 by default), `--level LEVEL` (see [Levels](#levels)), `--strip-ansi` (then omnitail colors those lines too), `--no-color`, `--print-config`, `--log-file PATH`.
 
 ## Levels
 

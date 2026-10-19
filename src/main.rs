@@ -55,15 +55,18 @@ async fn main() -> Result<()> {
 
     let (tx, rx) = mpsc::channel(EVENT_QUEUE);
     let pane_heights = pane_heights(sources.len());
+    // An explicit tail is kept on top of the history, so new lines do not
+    // push it out; the default one (a pane's worth) fits in it anyway.
+    let tails: Vec<Option<usize>> = sources.iter().map(|s| s.tail.or(settings.tail)).collect();
     for (id, config) in sources.iter().enumerate() {
-        let lines = config.lines.or(settings.lines).unwrap_or(pane_heights[id]);
-        source::build(config, lines).spawn(Emitter::new(id, tx.clone()));
+        source::build(config, tails[id].unwrap_or(pane_heights[id])).spawn(Emitter::new(id, tx.clone()));
     }
     drop(tx);
 
     let mut app = App::new(panes, library, settings.history, settings.strip_ansi);
-    for (pane, config) in app.panes.iter_mut().zip(&sources) {
+    for ((pane, config), tail) in app.panes.iter_mut().zip(&sources).zip(tails) {
         pane.level = settings.level.or(config.level);
+        pane.buffer.grow(tail.unwrap_or(0));
     }
     app.start_solo();
     // `init` also installs a panic hook that restores the terminal.

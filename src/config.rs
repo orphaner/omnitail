@@ -11,7 +11,7 @@
 //! type = "file"
 //! path = "logs/app.log"
 //! name = "app"
-//! lines = 100
+//! tail = 100
 //! ```
 
 use std::collections::{BTreeMap, HashMap};
@@ -74,7 +74,7 @@ pub struct Settings {
     pub sources: Vec<SourceConfig>,
     pub history: usize,
     pub strip_ansi: bool,
-    pub lines: Option<usize>,
+    pub tail: Option<usize>,
     pub color: bool,
     pub schemes: HashMap<String, SchemeDef>,
     /// Level filter for every pane, over each source's own.
@@ -105,7 +105,7 @@ impl Settings {
             sources,
             history: cli.history.or(file.history).unwrap_or(DEFAULT_HISTORY),
             strip_ansi: cli.strip_ansi || file.strip_ansi.unwrap_or(false),
-            lines: cli.lines,
+            tail: cli.tail,
             color: !cli.no_color && file.color.unwrap_or(true),
             schemes: file.scheme,
             level: cli.level,
@@ -114,7 +114,7 @@ impl Settings {
 
     /// A config file for `-c` running the same thing as these settings,
     /// with `sources` as expanded (one per compose service). Options given
-    /// for every pane (`--level`, `-n`) go into each source.
+    /// for every pane (`--level`, `--tail`) go into each source.
     pub fn to_toml(&self, sources: &[SourceConfig]) -> Result<String> {
         #[derive(Serialize)]
         struct Printed<'a> {
@@ -134,7 +134,7 @@ impl Settings {
             color: (!self.color).then_some(false),
             source: sources
                 .iter()
-                .map(|s| SourceConfig { lines: s.lines.or(self.lines), level: self.level.or(s.level), ..s.clone() })
+                .map(|s| SourceConfig { tail: s.tail.or(self.tail), level: self.level.or(s.level), ..s.clone() })
                 .collect(),
             scheme: self.schemes.iter().collect(),
         };
@@ -172,7 +172,7 @@ mod tests {
             type = "file"
             path = "app.log"
             name = "app"
-            lines = 5
+            tail = 5
             level = "WARNING"
             [[source]]
             type = "compose"
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(config.history, Some(50));
         let [app, compose, k8s] = &config.sources[..] else { panic!("{config:?}") };
         assert_eq!(app.spec, SourceSpec::File { path: dir.path().join("app.log") });
-        assert_eq!((app.title(), app.lines), ("app".into(), Some(5)));
+        assert_eq!((app.title(), app.tail), ("app".into(), Some(5)));
         assert_eq!((app.level, compose.level), (Some(crate::level::Level::Warn), None));
         assert_eq!(
             compose.spec,
@@ -263,7 +263,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = write_config(
             dir.path(),
-            "color = false\n[scheme.mine]\nrules = [{ regex = 'x', style = \"red\" }]\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"\nlines = 3",
+            "color = false\n[scheme.mine]\nrules = [{ regex = 'x', style = \"red\" }]\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"\ntail = 3",
         );
         let cli = Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap(), "--level", "warn", "-n", "9"]).unwrap();
         let settings = Settings::resolve(cli).unwrap();
@@ -281,8 +281,8 @@ mod tests {
         assert_eq!(config.color, Some(false));
         assert_eq!(config.scheme, settings.schemes);
         let [date, web, db] = &config.sources[..] else { panic!("{text}") };
-        assert_eq!((date.lines, date.level), (Some(3), Some(crate::level::Level::Warn)), "own lines win, --level applies");
-        assert_eq!((web.lines, web.title(), db.title()), (Some(9), "web".into(), "db".into()));
+        assert_eq!((date.tail, date.level), (Some(3), Some(crate::level::Level::Warn)), "own tail wins, --level applies");
+        assert_eq!((web.tail, web.title(), db.title()), (Some(9), "web".into(), "db".into()));
         assert_eq!(web.spec, SourceSpec::Compose { services: vec!["web".into()], file: Some(dir.path().join("compose.yaml")) });
     }
 

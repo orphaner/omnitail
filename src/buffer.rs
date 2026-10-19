@@ -54,6 +54,11 @@ impl Buffer {
         }
     }
 
+    /// Keeps `n` more lines.
+    pub fn grow(&mut self, n: usize) {
+        self.capacity += n;
+    }
+
     /// Appends a line, timestamped now, ranked by its own sequence number.
     #[cfg(test)]
     pub fn push(&mut self, line: String) {
@@ -133,6 +138,16 @@ mod tests {
             b.push(format!("l{i}"));
         }
         b
+    }
+
+    #[test]
+    fn grows_by_the_tail() {
+        let mut b = buf(3, 0);
+        b.grow(2);
+        for i in 0..6 {
+            b.push(format!("l{i}"));
+        }
+        assert_eq!((b.len(), b.first_seq()), (5, 1));
     }
 
     #[test]

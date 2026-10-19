@@ -120,14 +120,14 @@ pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
     Ok(out)
 }
 
-/// `lines`: existing lines to show when the source starts.
-pub fn build(config: &SourceConfig, lines: usize) -> Box<dyn Source> {
+/// `tail`: existing lines to read when the source starts.
+pub fn build(config: &SourceConfig, tail: usize) -> Box<dyn Source> {
     let command = |argv| Box::new(CommandSource::new(argv).restart(config.restart()));
     match &config.spec {
-        SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), lines)),
+        SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), tail)),
         SourceSpec::Cmd { command: c } => Box::new(CommandSource::shell(c).restart(config.restart())),
-        SourceSpec::Docker { container } => command(tools::docker(container.clone(), lines)),
-        SourceSpec::Compose { services, file } => command(tools::compose(file.clone(), services.clone(), lines)),
+        SourceSpec::Docker { container } => command(tools::docker(container.clone(), tail)),
+        SourceSpec::Compose { services, file } => command(tools::compose(file.clone(), services.clone(), tail)),
         SourceSpec::K8s { target, namespace, context, container, args } => command(tools::k8s(
             tools::K8sTarget {
                 target: target.clone(),
@@ -136,9 +136,9 @@ pub fn build(config: &SourceConfig, lines: usize) -> Box<dyn Source> {
                 container: container.clone(),
                 args: args.clone(),
             },
-            lines,
+            tail,
         )),
-        SourceSpec::Journal { unit } => command(tools::journal(unit.clone(), lines)),
+        SourceSpec::Journal { unit } => command(tools::journal(unit.clone(), tail)),
         SourceSpec::Stdin => Box::new(StdinSource),
     }
 }

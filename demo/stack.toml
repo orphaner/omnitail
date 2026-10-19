@@ -28,4 +28,4 @@ type = "k8s"
 target = "k8s-app=kube-dns"
 namespace = "kube-system"
 name = "coredns"
-lines = 3
+tail = 3

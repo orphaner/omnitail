@@ -26,7 +26,8 @@ pub struct Entry {
     pub level: Option<Level>,
     /// Where the line comes from within its source: a pod, when a k8s
     /// source follows several.
-    pub origin: Option<Origin>,
+    /// Shared by all the lines of a pod's container: 8 bytes per line.
+    pub origin: Option<Arc<Origin>>,
 }
 
 /// Where a line comes from within a k8s source, shown as badges before it.

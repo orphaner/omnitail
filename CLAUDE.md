@@ -50,7 +50,7 @@ Releases are built by `dist` (cargo-dist, config in `dist-workspace.toml`). `.gi
 
 ## Performance
 
-`perf/README.md` explains it: `src/perf.rs` holds timed checks with budgets (`cargo test --release perf -- --ignored --nocapture --test-threads=1`), `perf/run.sh` runs the release binary end to end on logs from `perf/gen-logs.py` and writes `target/perf/report.md`, using the `omnitail::perf` statistics `app::run` logs on exit. `.github/workflows/perf.yml` runs both on pushes to main and on demand. Measure release builds only. Known costs: a line takes ~120 bytes plus its text; a pane filter keeping almost nothing makes each frame look through the whole history.
+`perf/README.md` explains it: `src/perf.rs` holds timed checks with budgets (`cargo test --release perf -- --ignored --nocapture --test-threads=1`), `perf/run.sh` runs the release binary end to end on logs from `perf/gen-logs.py` and writes `target/perf/report.md`, using the `omnitail::perf` statistics `app::run` logs on exit. `.github/workflows/perf.yml` runs both on pushes to main and on demand. Measure release builds only. Known costs: a line takes 64 bytes plus its text (`Entry::origin` is an `Arc` shared by a container's lines, cached in `App::origins`); a pane filter keeping almost nothing makes each frame look through the whole history.
 
 ## Demo
 

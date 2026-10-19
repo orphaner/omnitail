@@ -60,11 +60,11 @@ MacBook (Apple silicon), release build, 2026-10-19.
 
 | End to end | Result | First lines on screen | Frame p50 / p99 | Max memory | CPU |
 |---|---|---|---|---|---|
-| `--tail 1000000` on a 135 MB file | all loaded in 1.7 s | 0.65 s | 0.9 / 4.9 ms | 465 MB | 2.0 s |
+| `--tail 1000000` on a 135 MB file | all loaded in 1.4 s | 0.56 s | 0.8 / 1.3 ms | 412 MB | 1.9 s |
 | 1M lines piped on stdin | 1.04M lines/s | 11 ms | 0.8 / 1.3 ms | 36 MB | 2.2 s |
 | file growing 10k lines/s for 10 s | all 99,900 shown | — | 0.8 / 1.5 ms | 34 MB | 1% |
 | file growing 50k lines/s for 10 s | all 499,500 shown | — | 0.8 / 1.6 ms | 47 MB | 7% |
 
-Notes: each line costs about 120 bytes of bookkeeping plus its text, so keeping a million lines takes
-~450 MB; the 10,000 lines kept by default stay around 40 MB. For growing files, "first lines on
+Notes: each line costs 64 bytes of bookkeeping plus its text (k8s origins are shared per container),
+so keeping a million lines takes ~400 MB; the 10,000 lines kept by default stay around 40 MB. For growing files, "first lines on
 screen" only says when the generator started writing.

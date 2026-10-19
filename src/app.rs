@@ -102,7 +102,7 @@ impl Pane {
     /// The scheme for `entry`: the pane's own, or when it mixes containers
     /// and guesses formats, the one guessed for the entry's container.
     pub fn scheme_for(&self, entry: &Entry) -> Option<&Scheme> {
-        let guessed = entry.origin.as_ref().filter(|_| self.color.choice == "auto").and_then(|o| self.by_container.get(&o.container));
+        let guessed = entry.origin.as_deref().filter(|_| self.color.choice == "auto").and_then(|o| self.by_container.get(&o.container));
         match guessed {
             Some(color) if self.color.enabled => color.scheme.as_deref(),
             _ => self.color.active(),
@@ -126,7 +126,7 @@ impl Pane {
 
     /// Stores a line that arrived, its level read or inherited.
     fn receive(&mut self, mut entry: Entry, stated: Option<Level>, library: &Library) -> Seq {
-        self.observe(&entry.text, entry.origin.as_ref(), library);
+        self.observe(&entry.text, entry.origin.as_deref(), library);
         let seq = self.buffer.end_seq();
         // A line without a level (a stack trace, a wrapped message)
         // belongs with the line before it.
@@ -362,6 +362,8 @@ pub struct App {
     /// its color everywhere.
     pod_colors: HashMap<Arc<str>, usize>,
     container_colors: HashMap<Arc<str>, usize>,
+    /// Origins made so far, by pod then container, shared by their lines.
+    origins: HashMap<String, HashMap<String, Arc<Origin>>>,
     library: Arc<Library>,
 }
 
@@ -393,6 +395,7 @@ impl App {
             arrival: 0,
             pod_colors: HashMap::new(),
             container_colors: HashMap::new(),
+            origins: HashMap::new(),
             library,
         }
     }
@@ -456,13 +459,13 @@ impl App {
                 self.arrival += 1;
                 // Panes of the screens left by a split keep up too.
                 for pane in self.stack.iter_mut().flatten() {
-                    if pane.feed == id && pane.scope.accepts(entry.origin.as_ref()) {
+                    if pane.feed == id && pane.scope.accepts(entry.origin.as_deref()) {
                         pane.receive(entry.clone(), stated, &self.library);
                     }
                 }
                 let mut received = Vec::new();
                 for (i, pane) in self.panes.iter_mut().enumerate() {
-                    if pane.feed == id && pane.scope.accepts(entry.origin.as_ref()) {
+                    if pane.feed == id && pane.scope.accepts(entry.origin.as_deref()) {
                         received.push((i, pane.receive(entry.clone(), stated, &self.library)));
                     }
                 }
@@ -500,7 +503,10 @@ impl App {
 
     /// The origin of a line from `pod`'s `container`, with the colors of
     /// their badges.
-    fn origin(&mut self, pod: &str, container: &str) -> Origin {
+    fn origin(&mut self, pod: &str, container: &str) -> Arc<Origin> {
+        if let Some(origin) = self.origins.get(pod).and_then(|c| c.get(container)) {
+            return origin.clone();
+        }
         fn color(colors: &mut HashMap<Arc<str>, usize>, name: &str) -> (Arc<str>, usize) {
             if let Some((name, &color)) = colors.get_key_value(name) {
                 return (name.clone(), color);
@@ -511,7 +517,9 @@ impl App {
         }
         let (pod_name, pod_color) = color(&mut self.pod_colors, pod);
         let (container, container_color) = color(&mut self.container_colors, container);
-        Origin { badge: pod_badge(pod).into(), pod: pod_name, color: pod_color, container, container_color }
+        let origin = Arc::new(Origin { badge: pod_badge(pod).into(), pod: pod_name, color: pod_color, container, container_color });
+        self.origins.entry(pod.to_owned()).or_default().insert(origin.container.to_string(), origin.clone());
+        origin
     }
 
     /// The badges lines need in a pane of `feed` showing `scope`.
@@ -554,7 +562,7 @@ impl App {
                     next.push(s);
                 }
             };
-            let seen = pane.buffer.entries().filter_map(|(_, e)| e.origin.as_ref());
+            let seen = pane.buffer.entries().filter_map(|(_, e)| e.origin.as_deref());
             match &scope {
                 Scope::All => {
                     feed.pods.iter().for_each(|p| add(Scope::Pod(p.name.as_str().into())));
@@ -599,8 +607,8 @@ impl App {
         pane.badges = self.badges(parent.feed, &scope);
         pane.scope = scope;
         let scope = pane.scope.clone();
-        for (_, entry) in parent.buffer.entries().filter(|(_, e)| scope.accepts(e.origin.as_ref())) {
-            pane.observe(&entry.text, entry.origin.as_ref(), &self.library);
+        for (_, entry) in parent.buffer.entries().filter(|(_, e)| scope.accepts(e.origin.as_deref())) {
+            pane.observe(&entry.text, entry.origin.as_deref(), &self.library);
             pane.buffer.push_entry(entry.clone());
         }
         pane
@@ -1513,6 +1521,10 @@ mod tests {
         assert_eq!((&*o.pod, &*o.badge, &*o.container), ("shop-5d8-aaaaa", "aaaaa", "app"));
         assert_ne!(o.color, second.origin.as_ref().unwrap().color);
         assert_eq!(entry(1, 0).text, "[pod/x/y] not a k8s source");
+        a.ingest(0, line("[pod/shop-5d8-aaaaa/app] again"));
+        let again = a.panes[0].buffer.entry(2).unwrap().origin.clone().unwrap();
+        assert!(Arc::ptr_eq(first.origin.as_ref().unwrap(), &again), "one origin per container, shared");
+        assert_eq!(std::mem::size_of::<Option<Arc<Origin>>>(), 8);
         assert_eq!(a.panes[0].badges, Badges { pod: true, container: Some(5) });
 
         a.panes[0].filter = Some(Pattern::parse("bbbbb", true).unwrap());

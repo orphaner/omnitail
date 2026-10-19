@@ -83,6 +83,8 @@ pub struct SchemePicker {
     pub query: String,
     /// Index in the filtered list.
     pub selected: usize,
+    /// The history view it was opened from, to go back to.
+    pub back: Option<Scrollback>,
 }
 
 /// One line of the scheme popup.
@@ -232,6 +234,8 @@ pub struct App {
     /// Patterns typed so far, oldest first.
     history: Vec<String>,
     pub quit: bool,
+    /// A single source: its history is the whole app, `q` there quits.
+    pub solo: bool,
     /// Shown in the key bar until the next key.
     pub notice: Option<String>,
     /// Text for the terminal clipboard, sent by the event loop.
@@ -271,6 +275,7 @@ impl App {
             help: None,
             history: Vec::new(),
             quit: false,
+            solo: false,
             notice: None,
             clipboard: None,
             arrival: 0,
@@ -287,6 +292,14 @@ impl App {
             .map(|n| (n.to_string(), PaneColor::new(crate::color::Choice::Auto, &library, true).unwrap()))
             .collect();
         Self::new(panes, library, 100, false)
+    }
+
+    /// With a single source, opens straight on its history, following the end.
+    pub fn start_solo(&mut self) {
+        if let [pane] = &self.panes[..] {
+            self.solo = true;
+            self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(0), pane.filter.clone(), pane.level));
+        }
     }
 
     /// A scheme by name, for views that need a specific one (JSON details).
@@ -388,10 +401,14 @@ impl App {
         let count = self.scheme_entries(&picker.query).len();
         let last = count.saturating_sub(1);
         match key.code {
-            KeyCode::Esc => return,
-            KeyCode::Enter => {
-                if let Some(entry) = self.scheme_entries(&picker.query).get(picker.selected) {
+            KeyCode::Esc | KeyCode::Enter => {
+                if key.code == KeyCode::Enter
+                    && let Some(entry) = self.scheme_entries(&picker.query).get(picker.selected)
+                {
                     self.set_scheme(picker.pane, &entry.name);
+                }
+                if let Some(sb) = picker.back {
+                    self.mode = Mode::Scrollback(sb);
                 }
                 return;
             }
@@ -524,7 +541,10 @@ impl App {
         let page = sb.page.max(1);
         let selected = current.and_then(|p| view.line(p)).map(|l| (l.pane, l.seq));
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => return,
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.quit = self.solo;
+                return;
+            }
             KeyCode::Up | KeyCode::Char('k') => sb.cursor = step(1, false),
             KeyCode::Down | KeyCode::Char('j') => sb.cursor = down(1),
             KeyCode::PageUp | KeyCode::Char('u') => sb.cursor = step(page, false),
@@ -538,6 +558,18 @@ impl App {
                 sb.hscroll = 0;
             }
             KeyCode::Char('t') => self.times = !self.times,
+            // Colors of the pane, from its own history only.
+            KeyCode::Char('c') => {
+                if let Target::Pane(pane) = sb.target {
+                    let color = &mut self.panes[pane].color;
+                    color.enabled = !color.enabled && color.available();
+                }
+            }
+            KeyCode::Char('s') => {
+                if let Target::Pane(pane) = sb.target {
+                    return self.open_schemes(pane, Some(sb));
+                }
+            }
             KeyCode::Char('l') => {
                 sb.level = Level::cycle(sb.level);
                 sb.search = None;
@@ -783,13 +815,15 @@ impl App {
                 let input = self.panes[pane].filter.as_ref().map(|f| f.text.clone()).unwrap_or_default();
                 self.prompt = Some(Prompt::new(PromptKind::PaneFilter(Some(pane)), input));
             }
-            SelectPurpose::Scheme => {
-                // Start on the pane's current choice.
-                let current = &self.panes[pane].color.choice;
-                let selected = self.scheme_entries("").iter().position(|e| &e.name == current).unwrap_or(0);
-                self.mode = Mode::Schemes(SchemePicker { pane, query: String::new(), selected });
-            }
+            SelectPurpose::Scheme => self.open_schemes(pane, None),
         }
+    }
+
+    /// The scheme popup of `pane`, on its current choice.
+    fn open_schemes(&mut self, pane: usize, back: Option<Scrollback>) {
+        let current = &self.panes[pane].color.choice;
+        let selected = self.scheme_entries("").iter().position(|e| &e.name == current).unwrap_or(0);
+        self.mode = Mode::Schemes(SchemePicker { pane, query: String::new(), selected, back });
     }
 }
 
@@ -1024,6 +1058,47 @@ mod tests {
         press(&mut a, KeyCode::Char('b'));
         press(&mut a, KeyCode::Char('2'));
         assert!(matches!(a.mode, Mode::Scrollback(Scrollback { target: Target::Pane(1), cursor: None, .. })));
+    }
+
+    #[test]
+    fn single_source_opens_on_its_history_and_quits_from_it() {
+        let mut a = app(2);
+        a.start_solo();
+        assert!(matches!(a.mode, Mode::Panes) && !a.solo, "several panes: nothing changes");
+
+        let mut a = app(1);
+        a.panes[0].level = Some(Level::Warn);
+        a.start_solo();
+        assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.target == Target::Pane(0) && sb.cursor.is_none()));
+        assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.level == Some(Level::Warn)), "pane level kept");
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('q'));
+        assert!(matches!(a.mode, Mode::Scrollback(_)) && !a.quit, "detail goes back to the history");
+        press(&mut a, KeyCode::Esc);
+        assert!(a.quit);
+    }
+
+    #[test]
+    fn colors_and_scheme_from_a_pane_history() {
+        let mut a = app(1);
+        a.start_solo();
+        press(&mut a, KeyCode::Char('s'));
+        assert!(matches!(&a.mode, Mode::Schemes(p) if p.back.is_some()));
+        type_text(&mut a, "logfmt");
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.mode, Mode::Scrollback(_)), "back to the history");
+        assert_eq!(a.panes[0].color.choice, "logfmt");
+        press(&mut a, KeyCode::Char('s'));
+        press(&mut a, KeyCode::Esc);
+        assert!(matches!(a.mode, Mode::Scrollback(_)) && !a.quit, "Esc leaves the popup only");
+        let enabled = a.panes[0].color.enabled;
+        press(&mut a, KeyCode::Char('c'));
+        assert_ne!(a.panes[0].color.enabled, enabled);
+
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('B'));
+        press(&mut a, KeyCode::Char('s'));
+        assert!(matches!(a.mode, Mode::Scrollback(_)), "not in the merged view");
     }
 
     #[test]

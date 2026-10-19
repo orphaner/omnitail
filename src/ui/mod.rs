@@ -55,7 +55,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     let json = app.scheme("json");
     match &mut app.mode {
-        Mode::Scrollback(sb) => {
+        Mode::Scrollback(sb) | Mode::Schemes(crate::app::SchemePicker { back: Some(sb), .. }) => {
             let opts = scrollback::ScrollbackOptions { strip: app.strip_ansi, wrap: app.wrap, times: app.times };
             scrollback::render(frame, main, sb, &app.panes, &opts)
         }
@@ -243,8 +243,11 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("y", "Copy"),
         ],
     };
+    // With a single source, its history is the top view: q leaves omnitail.
+    let quits = app.solo && matches!(app.mode, Mode::Scrollback(_));
     let mut spans: Vec<Span> = keys
         .iter()
+        .map(|&(key, desc)| (key, if quits && key == "q" { "Quit" } else { desc }))
         .flat_map(|(key, desc)| {
             [
                 Span::styled(format!(" {key} "), Style::new().fg(WHITE).bg(KEY_BG)),

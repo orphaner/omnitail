@@ -107,6 +107,12 @@ impl FromStr for Level {
     }
 }
 
+impl serde::Serialize for Level {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.name())
+    }
+}
+
 impl<'de> serde::Deserialize<'de> for Level {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         String::deserialize(d)?.parse().map_err(serde::de::Error::custom)

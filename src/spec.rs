@@ -4,10 +4,10 @@ use std::fmt;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// What to follow. Config files use the same shape, tagged by `type`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum SourceSpec {
     File {
@@ -22,23 +22,28 @@ pub enum SourceSpec {
     /// Services of a compose project; each one gets its own pane. No
     /// services means all of them.
     Compose {
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         services: Vec<String>,
         /// Compose file; the project is the one in the current directory otherwise.
+        #[serde(skip_serializing_if = "Option::is_none")]
         file: Option<PathBuf>,
     },
     K8s {
         /// `pod/x`, `deploy/x`, any `kubectl logs` target, or a label selector (`app=api`).
         target: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         namespace: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         context: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         container: Option<String>,
         /// Extra `kubectl logs` arguments.
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         args: Vec<String>,
     },
     /// systemd journal, of one unit or of everything.
     Journal {
+        #[serde(skip_serializing_if = "Option::is_none")]
         unit: Option<String>,
     },
     Stdin,
@@ -115,25 +120,30 @@ impl fmt::Display for SourceSpec {
 
 /// A source plus the options any source can have. On the command line only
 /// the spec can be given; config files can set the rest.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct SourceConfig {
     #[serde(flatten)]
     pub spec: SourceSpec,
     /// Pane title, instead of the source description.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// Existing lines shown at start (default: fill the pane).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub lines: Option<usize>,
     /// Start the source again when it ends. Default: on for containers,
     /// whose log streams end whenever the container restarts.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub restart: Option<bool>,
     /// Color scheme(s), in priority order; `"none"` turns omnitail's coloring
     /// off. Default: guessed from the first lines.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<SchemeRef>,
     /// Show only lines of this level and up (`L`/`l` change it).
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub level: Option<crate::level::Level>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum SchemeRef {
     One(String),

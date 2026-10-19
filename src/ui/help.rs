@@ -44,13 +44,14 @@ pub const HISTORY: Section = Section {
         ("n N", "next match / previous one"),
         ("&", "show matching lines only"),
         ("l", "levels shown in this view"),
+        ("c s", "colors on/off, scheme (b only)"),
         ("Enter", "line detail, JSON pretty-printed"),
         ("y", "copy the line"),
         ("p", "pause the view"),
         ("t", "arrival times"),
         ("w", "wrap or cut lines"),
         ("← →", "scroll sideways (cut lines)"),
-        ("q Esc", "back"),
+        ("q Esc", "back (quit with one source)"),
     ],
 };
 

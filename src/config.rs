@@ -14,17 +14,20 @@
 //! lines = 100
 //! ```
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::cli::Cli;
 use crate::color::SchemeDef;
 use crate::spec::{SourceConfig, SourceSpec};
 
 const DEFAULT_HISTORY: usize = 10_000;
+
+/// Files `docker compose` reads by default, in its order of preference.
+const COMPOSE_FILES: [&str; 4] = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,14 +84,19 @@ pub struct Settings {
 impl Settings {
     /// Config file sources come first, then command-line ones; command-line
     /// options win over the file.
+    /// With neither, the compose project of the current directory.
     pub fn resolve(cli: Cli) -> Result<Self> {
         let file = match &cli.config {
             Some(path) => ConfigFile::load(path)?,
             None => ConfigFile::default(),
         };
-        let sources: Vec<SourceConfig> = file.sources.into_iter().chain(cli.sources.into_iter().map(Into::into)).collect();
+        let mut sources: Vec<SourceConfig> =
+            file.sources.into_iter().chain(cli.sources.into_iter().map(Into::into)).collect();
+        if sources.is_empty() && cli.config.is_none() {
+            sources.extend(compose_here(Path::new(".")));
+        }
         if sources.is_empty() {
-            bail!("no sources to follow");
+            bail!("no sources to follow, and no compose file here (see --help)");
         }
         if sources.iter().filter(|s| s.spec == SourceSpec::Stdin).count() > 1 {
             bail!("stdin (`-`) can only be followed once");
@@ -103,6 +111,42 @@ impl Settings {
             level: cli.level,
         })
     }
+
+    /// A config file for `-c` running the same thing as these settings,
+    /// with `sources` as expanded (one per compose service). Options given
+    /// for every pane (`--level`, `-n`) go into each source.
+    pub fn to_toml(&self, sources: &[SourceConfig]) -> Result<String> {
+        #[derive(Serialize)]
+        struct Printed<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            history: Option<usize>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            strip_ansi: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            color: Option<bool>,
+            source: Vec<SourceConfig>,
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            scheme: BTreeMap<&'a String, &'a SchemeDef>,
+        }
+        let printed = Printed {
+            history: Some(self.history).filter(|&h| h != DEFAULT_HISTORY),
+            strip_ansi: self.strip_ansi.then_some(true),
+            color: (!self.color).then_some(false),
+            source: sources
+                .iter()
+                .map(|s| SourceConfig { lines: s.lines.or(self.lines), level: self.level.or(s.level), ..s.clone() })
+                .collect(),
+            scheme: self.schemes.iter().collect(),
+        };
+        let body = toml::to_string(&printed).context("cannot write the config")?;
+        Ok(format!("# omnitail config, run it with: omnitail -c <this file>\n\n{body}"))
+    }
+}
+
+/// The compose project of `dir`, if it has a compose file.
+fn compose_here(dir: &Path) -> Option<SourceConfig> {
+    let file = COMPOSE_FILES.iter().find(|f| dir.join(f).is_file())?;
+    Some(SourceSpec::Compose { services: vec![], file: Some(file.into()) }.into())
 }
 
 #[cfg(test)]
@@ -202,6 +246,44 @@ mod tests {
 
         let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "--history", "7"]).unwrap()).unwrap();
         assert_eq!(s.history, 7);
+    }
+
+    #[test]
+    fn compose_file_of_the_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(compose_here(dir.path()), None);
+        std::fs::write(dir.path().join("docker-compose.yml"), "").unwrap();
+        std::fs::write(dir.path().join("compose.yaml"), "").unwrap();
+        let spec = compose_here(dir.path()).map(|s| s.spec);
+        assert_eq!(spec, Some(SourceSpec::Compose { services: vec![], file: Some("compose.yaml".into()) }));
+    }
+
+    #[test]
+    fn printed_config_reads_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_config(
+            dir.path(),
+            "color = false\n[scheme.mine]\nrules = [{ regex = 'x', style = \"red\" }]\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"\nlines = 3",
+        );
+        let cli = Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap(), "--level", "warn", "-n", "9"]).unwrap();
+        let settings = Settings::resolve(cli).unwrap();
+        let services = ["web", "db"].map(|s| SourceConfig {
+            name: Some(s.into()),
+            ..SourceSpec::Compose { services: vec![s.into()], file: Some("compose.yaml".into()) }.into()
+        });
+        let sources: Vec<_> = settings.sources.iter().cloned().chain(services).collect();
+        let text = settings.to_toml(&sources).unwrap();
+        assert!(text.contains("type = \"compose\"\nservices = [\"web\"]\nfile = \"compose.yaml\"\n"), "{text}");
+        assert!(!text.contains("history"), "defaults are left out: {text}");
+
+        let back = write_config(dir.path(), &text);
+        let config = ConfigFile::load(&back).unwrap();
+        assert_eq!(config.color, Some(false));
+        assert_eq!(config.scheme, settings.schemes);
+        let [date, web, db] = &config.sources[..] else { panic!("{text}") };
+        assert_eq!((date.lines, date.level), (Some(3), Some(crate::level::Level::Warn)), "own lines win, --level applies");
+        assert_eq!((web.lines, web.title(), db.title()), (Some(9), "web".into(), "db".into()));
+        assert_eq!(web.spec, SourceSpec::Compose { services: vec!["web".into()], file: Some(dir.path().join("compose.yaml")) });
     }
 
     #[test]

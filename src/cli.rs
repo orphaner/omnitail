@@ -10,8 +10,9 @@ use crate::spec::SourceSpec;
 pub struct Cli {
     /// Sources to follow: `<path>`, `file:<path>`, `cmd:<command>`,
     /// `docker:<container>` (or `d:`), `compose:[svc,…]` (or `dc:`), `k8s:<target> [kubectl args]`,
-    /// `journal:[unit]`, `-` (stdin).
-    #[arg(required_unless_present_any = ["config", "list_schemes"], value_name = "SOURCE")]
+    /// `journal:[unit]`, `-` (stdin). None: the compose project of the current
+    /// directory, if it has a compose file.
+    #[arg(value_name = "SOURCE")]
     pub sources: Vec<SourceSpec>,
 
     /// TOML file listing sources (`[[source]]` tables) and options.
@@ -39,6 +40,11 @@ pub struct Cli {
     #[arg(long)]
     pub no_color: bool,
 
+    /// Print the sources and options as a config file (for -c), one source
+    /// per compose service, and exit.
+    #[arg(long)]
+    pub print_config: bool,
+
     /// List the color schemes (with those of --config) and exit.
     #[arg(long)]
     pub list_schemes: bool,
@@ -64,9 +70,9 @@ mod tests {
     }
 
     #[test]
-    fn requires_a_source_or_a_config() {
-        assert!(Cli::try_parse_from(["omnitail"]).is_err());
-        assert!(Cli::try_parse_from(["omnitail", "-c", "x.toml"]).is_ok());
+    fn sources_are_optional() {
+        let cli = Cli::try_parse_from(["omnitail", "--print-config"]).unwrap();
+        assert!(cli.sources.is_empty() && cli.print_config);
     }
 
     #[test]

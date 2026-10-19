@@ -5,29 +5,34 @@ use std::sync::{Arc, OnceLock};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use regex::{Regex, RegexSet};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::style;
 
 /// A rule as written in TOML: `{ regex = '…', group = 1, style = "red bold" }`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuleDef {
     pub regex: String,
     /// Capture group to color; 0 (default) is the whole match.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub group: usize,
     pub style: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemeDef {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Regexes on file paths: files matching one get this scheme by default.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
     pub rules: Vec<RuleDef>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone)]

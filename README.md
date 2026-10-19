@@ -15,9 +15,10 @@ Or download an archive from the [releases](https://github.com/orphaner/omnitail/
 ## Usage
 
 ```bash
-cargo run -- [OPTIONS] <SOURCE>...
+omnitail [OPTIONS] [SOURCE]...
 
 # examples
+omnitail                       # in a directory with a compose file: all its services
 omnitail /var/log/system.log app.log
 omnitail app.log 'cmd:kubectl logs -f deploy/api' docker:postgres
 ```
@@ -36,7 +37,9 @@ Sources:
 
 Container sources (docker, compose, k8s) restart when their stream ends, resuming where it stopped.
 
-Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `lines`, `restart`, `scheme` and `level`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`.
+Without any source, omnitail follows the compose project of the current directory (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`), one pane per service. With a single source, it opens straight on its full-screen history (see [Keys](#keys)), following the end like `tail -f`; `q` quits.
+
+Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `lines`, `restart`, `scheme` and `level`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`. `--print-config` writes one from the command line, with one source per compose service, to edit from there: `omnitail --print-config > stack.toml`.
 
 ## Colors
 
@@ -58,7 +61,7 @@ rules = [
 
 Styles are color names (red, green, yellow, blue, magenta, cyan, white, gray, orange, black), `0`-`255` or `#rrggbb`, plus `bold`, `dim`, `italic`, `underline` and `reverse`, with `fg:` and `bg:` prefixes. Where two rules match the same text, the first one wins. `--no-color` (or `color = false`) starts with coloring off.
 
-Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--level LEVEL` (see [Levels](#levels)), `--strip-ansi` (then omnitail colors those lines too), `--no-color`, `--log-file PATH`.
+Options: `-c/--config PATH`, `-n/--lines N` (existing lines shown at start; by default, enough to fill each pane), `--history N` (lines kept per source, 10,000 by default), `--level LEVEL` (see [Levels](#levels)), `--strip-ansi` (then omnitail colors those lines too), `--no-color`, `--print-config`, `--log-file PATH`.
 
 ## Levels
 
@@ -89,7 +92,7 @@ Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows
 
 Patterns are regular expressions with smart case: case-insensitive unless they contain an uppercase letter. The prompt keeps a history (`↑`/`↓`).
 
-In the history views (`b`, `B`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. As in `less`, `/` and `?` search down and up (wrapping around), `n`/`N` go to the next match in the same/other direction, and `&pattern` shows only matching lines (`&!pattern` hides them). A pane's history starts with that pane's filter and level; `l` changes the level of the view only. `p` pauses the view (searches stay within what was there), `t` shows when each line arrived. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`); `←`/`→` move to the previous/next line of the view. `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").
+In the history views (`b`, `B`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. As in `less`, `/` and `?` search down and up (wrapping around), `n`/`N` go to the next match in the same/other direction, and `&pattern` shows only matching lines (`&!pattern` hides them). A pane's history starts with that pane's filter and level; `l` changes the level of the view only. `p` pauses the view (searches stay within what was there), `t` shows when each line arrived, and in a pane's history `c`/`s` toggle its colors and choose its scheme. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`); `←`/`→` move to the previous/next line of the view. `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").
 
 ## License
 

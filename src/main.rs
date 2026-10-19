@@ -34,9 +34,14 @@ async fn main() -> Result<()> {
         return list_schemes(&cli);
     }
     init_logging(&cli)?;
+    let print_config = cli.print_config;
     let settings = Settings::resolve(cli)?;
     // Before the TUI starts, so that errors (e.g. no compose project) print normally.
-    let sources = source::expand(settings.sources).await?;
+    let sources = source::expand(settings.sources.clone()).await?;
+    if print_config {
+        print!("{}", settings.to_toml(&sources)?);
+        return Ok(());
+    }
 
     // Validates scheme names and rules before anything starts.
     let library = Arc::new(Library::new(&settings.schemes).map_err(|e| anyhow!(e))?);
@@ -60,6 +65,7 @@ async fn main() -> Result<()> {
     for (pane, config) in app.panes.iter_mut().zip(&sources) {
         pane.level = settings.level.or(config.level);
     }
+    app.start_solo();
     // `init` also installs a panic hook that restores the terminal.
     let mut terminal = ratatui::init();
     let result = app::run(&mut terminal, &mut app, rx).await;

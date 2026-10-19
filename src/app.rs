@@ -217,6 +217,9 @@ pub struct Scrollback {
     pub paused: Option<Pos>,
     /// Lowest level shown (`l`).
     pub level: Option<Level>,
+    /// Where the view ended when the cursor stopped following it, to count
+    /// the lines that arrived since (written by the renderer).
+    pub left_end: Option<Pos>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +233,7 @@ pub struct Search {
 
 impl Scrollback {
     fn new(target: Target, filter: Option<Pattern>, level: Option<Level>) -> Self {
-        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None, level }
+        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None, level, left_end: None }
     }
 
     #[cfg(test)]
@@ -240,6 +243,12 @@ impl Scrollback {
 
     pub fn view<'a>(&'a self, panes: &'a [Pane]) -> HistoryView<'a> {
         HistoryView::new(panes, &self.target, self.filter.as_ref()).until(self.paused).level(self.level)
+    }
+
+    /// Lines shown in the view that arrived since the cursor left the end.
+    pub fn arrived_below(&self, panes: &[Pane]) -> Option<usize> {
+        let view = self.view(panes);
+        self.left_end.map(|from| (from..view.end()).filter(|&p| view.visible(p).is_some()).count())
     }
 
     /// Lines that arrived since the view was paused.

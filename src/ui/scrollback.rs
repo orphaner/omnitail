@@ -17,6 +17,12 @@ pub struct ScrollbackOptions {
 
 pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane], opts: &ScrollbackOptions) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
+    // The cursor left the end (or came back): count new lines from there.
+    sb.left_end = match (sb.cursor, sb.left_end) {
+        (None, _) => None,
+        (Some(_), None) => Some(sb.view(panes).end()),
+        (Some(_), kept) => kept,
+    };
     let view = sb.view(panes);
     let highlight = sb.search.as_ref().map(|s| &s.pattern);
     let layout = Painter { view, panes, opts, highlight, width: body.width as usize, hscroll: sb.hscroll };
@@ -31,6 +37,9 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
     if let Some(n) = sb.arrived_since_pause(panes) {
         details.push(format!("⏸ paused +{n}"));
     }
+    if let Some(n) = sb.arrived_below(panes).filter(|&n| n > 0) {
+        details.push(format!("↓ +{n} new"));
+    }
     if let Some(s) = &sb.search {
         details.push(if s.total > 0 { format!("match {}/{}", s.rank, s.total) } else { format!("/{}", s.pattern.text) });
     }
@@ -42,11 +51,11 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
     }
     let details = details.iter().map(|d| format!("{d} · ")).collect::<String>();
     let paused = sb.arrived_since_pause(panes).map(|n| format!("⏸ +{n} · ")).unwrap_or_default();
+    let below = sb.arrived_below(panes).filter(|&n| n > 0).map(|n| format!("↓ +{n} · ")).unwrap_or_default();
     let right = [
         format!("scrollback · {details}{position}"),
         format!("{details}{position}"),
-        format!("{paused}{position}"),
-        position.clone(),
+        format!("{paused}{below}{position}"),
     ];
     match &sb.target {
         crate::view::Target::Pane(p) => super::render_title(frame, title, *p, &panes[*p], &right),

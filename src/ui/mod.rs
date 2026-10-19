@@ -174,9 +174,11 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
         Some(at) => format!(" ⏸ paused +{}", pane.buffer.end_seq().saturating_sub(at)),
         None => String::new(),
     };
-    // The name gives way first, so the status always stays visible.
-    let name_room =
-        (area.width as usize).saturating_sub(badge.len() + status.chars().count() + paused.chars().count() + 2);
+    // The name gives way first, so the status and the shortest right part
+    // (counts, position) always stay visible.
+    let right_room = right.last().map_or(0, |r| r.chars().count() + 2);
+    let name_room = (area.width as usize)
+        .saturating_sub(badge.len() + status.chars().count() + paused.chars().count() + 2 + right_room);
     let left = Line::from(vec![
         Span::styled(badge, Style::new().fg(WHITE).bg(BADGE_BG).bold()),
         Span::raw(format!(" {} ", ellipsize(&pane.name, name_room))).bold(),
@@ -351,6 +353,24 @@ mod tests {
         app.ingest(1, SourceEvent::Line("\x1b[31mpong\x1b[0m".into()));
         app.ingest(1, SourceEvent::Status(SourceStatus::Exited(Some(1))));
         app
+    }
+
+    #[test]
+    fn history_counts_new_lines_below_a_moved_cursor() {
+        let mut app = demo();
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Char('1'));
+        let title = |app: &mut App| screen(app).lines().next().unwrap().to_owned();
+        assert!(!title(&mut app).contains("new"), "following the end");
+        press(&mut app, KeyCode::Up);
+        screen(&mut app);
+        for i in 0..3 {
+            app.ingest(0, SourceEvent::Line(format!("new{i}")));
+        }
+        app.ingest(1, SourceEvent::Line("other pane".into()));
+        assert!(title(&mut app).contains("↓ +3"), "{}", title(&mut app));
+        press(&mut app, KeyCode::Char('G'));
+        assert!(!title(&mut app).contains("↓"), "back to following");
     }
 
     #[test]

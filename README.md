@@ -43,6 +43,10 @@ Without any source, omnitail follows the compose project of the current director
 
 Sources can also be listed in a TOML file, `omnitail -c stack.toml`, with per-source `name`, `tail`, `restart`, `scheme` and `level`. See [`demo/stack.toml`](demo/stack.toml), which runs against the demo compose project in `demo/`. `--print-config` writes one from the command line, with one source per compose service, to edit from there: `omnitail --print-config > stack.toml`.
 
+### From k9s
+
+[`contrib/k9s/plugins.yaml`](contrib/k9s/plugins.yaml) makes omnitail a [k9s](https://k9scli.io) plugin: `Ctrl-O` on a pod, a deployment, a statefulset, a daemonset, a replicaset, a job or a container opens omnitail on its logs, and `q` goes back to k9s. Copy it to the plugins file `k9s info` shows (or merge its entries into yours).
+
 ## Colors
 
 omnitail colors log lines itself: levels, timestamps, IPs, URLs, UUIDs and durations stand out. Each source's format is guessed from its first lines, then the matching scheme is used: `http` (nginx/apache access logs), `json`, `logfmt` or `syslog`, falling back on `generic`. Lines that already carry their own ANSI colors keep them.

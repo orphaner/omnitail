@@ -1,0 +1,27 @@
+# omnitail as a k9s plugin: Ctrl-O on a pod, a workload or a container opens
+# omnitail on its logs, with its pods and containers to split into (Enter).
+# q leaves omnitail and goes back to k9s.
+#
+# Copy this file to k9s's plugins file (`k9s info` shows where), or merge its
+# entries into the one you have. Needs omnitail on the PATH
+# (brew install orphaner/tap/omnitail).
+plugins:
+  omnitail:
+    shortCut: Ctrl-O
+    description: omnitail
+    scopes: [pods, deployments, statefulsets, daemonsets, replicasets, jobs]
+    command: omnitail
+    background: false
+    confirm: false
+    # One argument: omnitail parses the source itself.
+    args:
+      - "k8s:$RESOURCE_NAME/$NAME -n $NAMESPACE --context $CONTEXT"
+  omnitail-container:
+    shortCut: Ctrl-O
+    description: omnitail
+    scopes: [containers]
+    command: omnitail
+    background: false
+    confirm: false
+    args:
+      - "k8s:pod/$POD -n $NAMESPACE --context $CONTEXT -c $NAME"

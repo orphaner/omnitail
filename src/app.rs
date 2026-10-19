@@ -594,10 +594,12 @@ impl App {
             .or_else(|_| PaneColor::new(Choice::Off, &self.library, false))
             .expect("no coloring cannot fail");
         let feed = &self.feeds[parent.feed];
+        // A pod target already names its pod (`pod/debug > shell`).
+        let pod_part = |pod: &str| if feed.name.ends_with(&format!("/{pod}")) { String::new() } else { format!(" > {pod}") };
         let name = match &scope {
             Scope::All => feed.name.clone(),
-            Scope::Pod(pod) => format!("{} > {pod}", feed.name),
-            Scope::Container(pod, c) => format!("{} > {pod} > {c}", feed.name),
+            Scope::Pod(pod) => format!("{}{}", feed.name, pod_part(pod)),
+            Scope::Container(pod, c) => format!("{}{} > {c}", feed.name, pod_part(pod)),
         };
         let mut pane = Pane::new(name, color, parent.buffer.capacity(), parent.feed);
         pane.status = parent.status.clone();
@@ -1587,10 +1589,11 @@ mod tests {
 
     #[test]
     fn single_pods_and_containers_are_skipped() {
-        let mut a = shop(pods(&["debug"], &["shell", "tcpdump"]));
+        let mut a = App::with_names(&["k8s: shop > pod/debug"]);
+        a.set_pods(0, pods(&["debug"], &["shell", "tcpdump"]));
         a.start();
         let names: Vec<_> = a.panes.iter().map(|p| p.name.clone()).collect();
-        assert_eq!(names, ["k8s: shop > deploy/shop > debug > shell", "k8s: shop > deploy/shop > debug > tcpdump"], "one pod: its containers");
+        assert_eq!(names, ["k8s: shop > pod/debug > shell", "k8s: shop > pod/debug > tcpdump"], "one pod: its containers");
 
         let mut a = shop(pods(&["api-1-aaaaa", "api-1-bbbbb"], &["api"]));
         assert_eq!(a.panes[0].badges, Badges { pod: true, container: None }, "one container: no container badge");

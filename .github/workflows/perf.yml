@@ -1,0 +1,41 @@
+# Performance checks (see perf/README.md): budgets inside the app, then the
+# release binary end to end on generated logs. The report is in the job
+# summary and as an artifact. Run on pushes to main and on demand.
+
+name: Perf
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  perf:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal
+      - uses: Swatinem/rust-cache@v2
+      - name: GNU time
+        if: runner.os == 'Linux'
+        run: test -x /usr/bin/time || (sudo apt-get update && sudo apt-get install -y time)
+      - name: Checks inside the app
+        run: |
+          cargo test --release perf -- --ignored --nocapture --test-threads=1 | tee perf-checks.txt
+          { echo '### Checks (${{ matrix.os }})'; echo '```'; grep -o 'PERF.*' perf-checks.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - name: End to end
+        run: |
+          LINES=200000 RATES=10000 perf/run.sh
+          cat target/perf/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-${{ matrix.os }}
+          path: |
+            perf-checks.txt
+            target/perf/*.md
+            target/perf/*.time

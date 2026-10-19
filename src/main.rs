@@ -5,6 +5,8 @@ mod color;
 mod config;
 mod level;
 mod pattern;
+#[cfg(test)]
+mod perf;
 mod source;
 mod spec;
 mod ui;

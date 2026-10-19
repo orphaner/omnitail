@@ -1167,9 +1167,12 @@ pub async fn run(
     let mut input = EventStream::new();
     let mut signals = Signals::new()?;
     let mut dirty = true;
+    let mut stats = FrameStats::new();
     while !app.quit {
         if dirty {
+            let started = std::time::Instant::now();
             terminal.draw(|frame| crate::ui::draw(frame, app))?;
+            stats.frame(started.elapsed(), app.arrival);
             dirty = false;
         }
         tokio::select! {
@@ -1198,11 +1201,51 @@ pub async fn run(
                         Err(_) => break,
                     }
                 }
+                tracing::debug!(target: "omnitail::perf", lines = app.arrival, "batch");
                 dirty = true;
             }
         }
     }
+    stats.report(app.arrival);
     Ok(())
+}
+
+/// Frame times, logged on exit for `perf/run.sh` (`omnitail::perf` target).
+struct FrameStats {
+    started: std::time::Instant,
+    /// Microseconds per frame.
+    frames: Vec<u32>,
+    /// Since start, when the first frame with lines was drawn.
+    first_lines: Option<std::time::Duration>,
+}
+
+impl FrameStats {
+    fn new() -> Self {
+        Self { started: std::time::Instant::now(), frames: Vec::new(), first_lines: None }
+    }
+
+    fn frame(&mut self, took: std::time::Duration, lines: u64) {
+        self.frames.push(took.as_micros().min(u32::MAX as u128) as u32);
+        if lines > 0 && self.first_lines.is_none() {
+            self.first_lines = Some(self.started.elapsed());
+        }
+    }
+
+    fn report(mut self, lines: u64) {
+        self.frames.sort_unstable();
+        let at = |q: f64| self.frames.get(((self.frames.len() as f64 - 1.0) * q).round() as usize).copied().unwrap_or(0);
+        tracing::info!(
+            target: "omnitail::perf",
+            lines,
+            frames = self.frames.len(),
+            frame_p50_us = at(0.5),
+            frame_p99_us = at(0.99),
+            frame_max_us = at(1.0),
+            first_lines_ms = self.first_lines.map_or(0, |d| d.as_millis() as u64),
+            running_ms = self.started.elapsed().as_millis() as u64,
+            "summary"
+        );
+    }
 }
 
 /// System clipboard tools, tried in order when omnitail runs locally.

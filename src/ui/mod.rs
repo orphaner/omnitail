@@ -166,13 +166,19 @@ fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right:
         Some(s) => (s.to_string(), BAD),
     };
     let badge = format!(" {} ", index + 1);
-    let status = match pane.restarts {
-        0 => format!("● {status}"),
-        n => format!("● {status} ↻{n}"),
+    // A source that failed gets a cross; one running while the pane is
+    // paused gives way to the pause, which is what the pane shows.
+    let arrived = pane.paused.map(|at| pane.buffer.end_seq().saturating_sub(at));
+    let restarts = match pane.restarts {
+        0 => String::new(),
+        n => format!(" ↻{n}"),
     };
-    let paused = match pane.paused {
-        Some(at) => format!(" ⏸ paused +{}", pane.buffer.end_seq().saturating_sub(at)),
-        None => String::new(),
+    let (status, paused) = match (&pane.status, arrived) {
+        (Some(SourceStatus::Running), Some(n)) => (String::new(), format!("⏸ paused +{n}{restarts}")),
+        (_, arrived) => {
+            let mark = if color == BAD { "✗" } else { "●" };
+            (format!("{mark} {status}{restarts}"), arrived.map(|n| format!(" ⏸ +{n}")).unwrap_or_default())
+        }
     };
     // The name gives way first, so the status and the shortest right part
     // (counts, position) always stay visible.
@@ -404,7 +410,7 @@ mod tests {
         assert!(lines[0].ends_with("20 lines"));
         // Pane 1 has 5 body rows: the 5 newest lines, newest last.
         assert_eq!(&lines[1..6], ["a15", "a16", "a17", "a18", "a19"]);
-        assert!(lines[6].contains("cmd:ping ● exited: 1"));
+        assert!(lines[6].contains("cmd:ping ✗ exited: 1"), "a cross for a failed source");
         assert_eq!(lines[7], "pong");
         assert!(lines[11].contains("Quit"));
     }
@@ -440,8 +446,15 @@ mod tests {
         press(&mut app, KeyCode::Char('1'));
         app.ingest(0, SourceEvent::Line("late".into()));
         let s = screen(&mut app);
-        assert!(s.lines().next().unwrap().contains("⏸ paused +1"), "{s}");
+        let title = s.lines().next().unwrap();
+        assert!(title.contains("file:a.log ⏸ paused +1") && !title.contains("running"), "the pause instead: {s}");
         assert!(!s.contains("late"), "{s}");
+
+        press(&mut app, KeyCode::Char('p'));
+        press(&mut app, KeyCode::Char('2'));
+        app.ingest(1, SourceEvent::Line("after".into()));
+        let s = screen(&mut app);
+        assert!(s.contains("cmd:ping ✗ exited: 1 ⏸ +1"), "a failed source stays visible: {s}");
     }
 
     #[test]

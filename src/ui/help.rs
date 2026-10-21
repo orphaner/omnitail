@@ -30,10 +30,9 @@ pub const PANES: Section = Section {
         ("S", "colors on/off, all panes"),
         ("w", "wrap long lines, or cut them"),
         ("Enter", "open: pods, containers, history"),
-        ("Backspace", "back up one level"),
         ("h F1", "this help"),
         ("q", "quit"),
-        ("Esc", "back to the first screen, or quit (asks)"),
+        ("Esc", "one level up; on top, quit (asks)"),
         ("Ctrl+C", "quit, from anywhere"),
     ],
 };
@@ -51,7 +50,6 @@ pub const HISTORY: Section = Section {
         ("C c", "clear all panes / this one"),
         ("s S", "scheme (b only) / colors on/off"),
         ("Enter", "line detail, JSON pretty-printed"),
-        ("Backspace", "back to the panes"),
         ("y", "copy the line"),
         ("p", "pause the view"),
         ("t", "arrival times"),
@@ -70,7 +68,7 @@ pub const DETAIL: Section = Section {
         ("g G", "top / bottom"),
         ("/ ?", "search: highlight matches"),
         ("y", "copy the line"),
-        ("q Esc ⌫ Enter", "back"),
+        ("q Esc Enter", "back"),
     ],
 };
 

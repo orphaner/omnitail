@@ -389,11 +389,9 @@ pub struct App {
     arrival: u64,
     /// One per source, by `SourceId`.
     pub feeds: Vec<Feed>,
-    /// Screens left by splitting a pane (`Enter`), restored by `Backspace`.
+    /// Screens left by splitting a pane (`Enter`), restored by `Esc`.
     /// Their panes keep receiving lines.
     pub stack: Vec<Vec<Pane>>,
-    /// Depth of `stack` on the first screen, where `Esc` goes back to.
-    home_depth: usize,
     /// Badge colors given so far, by pod and by container name: each keeps
     /// its color everywhere.
     pod_colors: HashMap<Arc<str>, usize>,
@@ -415,7 +413,6 @@ impl App {
             panes,
             feeds,
             stack: Vec::new(),
-            home_depth: 0,
             mode: Mode::Panes,
             strip_ansi,
             wrap: true,
@@ -664,11 +661,13 @@ impl App {
         self.stack.push(std::mem::replace(&mut self.panes, children));
     }
 
-    /// Back to the screen before the last split (`Backspace`).
-    fn unsplit(&mut self) {
+    /// One level up (`Esc`): the screen before the last split; with none,
+    /// quitting, which is asked first (Esc is easily pressed once too
+    /// often; q does not ask).
+    fn back(&mut self) {
         match self.stack.pop() {
             Some(panes) => self.panes = panes,
-            None => self.notice = Some("not split: Enter splits a pane into its pods, then containers".into()),
+            None => self.confirm_quit = true,
         }
     }
 
@@ -680,27 +679,6 @@ impl App {
             self.split(0);
         } else {
             self.start_solo();
-        }
-        self.home_depth = self.stack.len();
-    }
-
-    /// Back to the first screen (`Esc`); quits from there.
-    fn home(&mut self) {
-        if self.stack.len() == self.home_depth {
-            // Esc is easily pressed once too often: ask first (q does not).
-            self.confirm_quit = true;
-        } else if self.stack.len() > self.home_depth {
-            self.panes = self.stack.swap_remove(self.home_depth);
-            self.stack.truncate(self.home_depth);
-        } else {
-            // Gone up past the first screen: split down to it again.
-            while self.stack.len() < self.home_depth && self.panes.len() == 1 {
-                let before = self.stack.len();
-                self.split(0);
-                if self.stack.len() == before {
-                    break;
-                }
-            }
         }
     }
 
@@ -818,7 +796,7 @@ impl App {
     fn panes_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
-            KeyCode::Esc => self.home(),
+            KeyCode::Esc => self.back(),
             KeyCode::Char('C') => self.clear_all(),
             KeyCode::Char('c') => self.select(SelectPurpose::Clear),
             KeyCode::Char('n') | KeyCode::Char('N') => match self.highlight {
@@ -858,7 +836,6 @@ impl App {
             KeyCode::Char('/') | KeyCode::Char('?') => self.search_prompt(key.code == KeyCode::Char('/')),
             KeyCode::Char('w') => self.wrap = !self.wrap,
             KeyCode::Enter => self.select(SelectPurpose::Open),
-            KeyCode::Backspace => self.unsplit(),
             _ => {}
         }
     }
@@ -903,7 +880,7 @@ impl App {
             }
             KeyCode::Esc if self.solo => self.confirm_quit = true,
             // Back up to the panes (a single source has none to go to).
-            KeyCode::Esc | KeyCode::Backspace if !self.solo => return,
+            KeyCode::Esc => return,
             KeyCode::Up | KeyCode::Char('k') => sb.cursor = step(1, false),
             KeyCode::Down | KeyCode::Char('j') => sb.cursor = down(1),
             KeyCode::PageUp | KeyCode::Char('u') => sb.cursor = step(page, false),
@@ -994,7 +971,7 @@ impl App {
     fn detail_key(&mut self, mut d: Detail, key: KeyEvent) {
         let page = d.page.max(1);
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Backspace => {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
                 self.mode = Mode::Scrollback(d.back);
                 return;
             }
@@ -1649,25 +1626,16 @@ mod tests {
         a.ingest(0, line("[pod/shop-1-bbbbb/proxy] later"));
         a.ingest(0, line("[pod/shop-1-aaaaa/app] elsewhere"));
         assert_eq!(texts(&a.panes[1]), ["proxy of shop-1-bbbbb", "later"]);
-        press(&mut a, KeyCode::Backspace);
-        assert_eq!(a.panes.len(), 3);
+        press(&mut a, KeyCode::Esc);
+        assert_eq!(a.panes.len(), 3, "Esc: one level up");
         assert_eq!(texts(&a.panes[1]).last().unwrap(), "later", "hidden panes kept up");
         assert_eq!(texts(&a.panes[0]).last().unwrap(), "elsewhere");
-        press(&mut a, KeyCode::Backspace);
+        press(&mut a, KeyCode::Esc);
         assert_eq!(a.panes.len(), 1);
         assert_eq!(a.panes[0].buffer.len(), 11);
-        press(&mut a, KeyCode::Backspace);
-        assert!(a.notice.as_ref().unwrap().starts_with("not split"));
-
+        assert!(!a.confirm_quit && !a.quit);
         press(&mut a, KeyCode::Esc);
-        assert_eq!(a.panes.len(), 3, "Esc: back down to the first screen");
-        press(&mut a, KeyCode::Enter);
-        press(&mut a, KeyCode::Char('1'));
-        press(&mut a, KeyCode::Esc);
-        assert!(a.panes[0].name.ends_with("shop-1-aaaaa") && a.panes.len() == 3 && !a.quit, "Esc: back up to it");
-        assert_eq!(a.stack.len(), 1);
-        press(&mut a, KeyCode::Esc);
-        assert!(a.confirm_quit, "Esc on the first screen asks to quit");
+        assert!(a.confirm_quit, "nothing above: Esc asks to quit");
     }
 
     #[test]
@@ -1685,8 +1653,8 @@ mod tests {
         press(&mut a, KeyCode::Enter);
         press(&mut a, KeyCode::Char('1'));
         assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.target == Target::Pane(0)), "nothing below: its history");
-        press(&mut a, KeyCode::Backspace);
-        assert!(matches!(a.mode, Mode::Panes) && a.panes.len() == 2, "Backspace: back to the panes");
+        press(&mut a, KeyCode::Esc);
+        assert!(matches!(a.mode, Mode::Panes) && a.panes.len() == 2, "Esc: back to the panes");
 
         let mut a = shop(pods(&["db-0"], &["db"]));
         a.start();
@@ -1698,8 +1666,8 @@ mod tests {
         assert!(matches!(a.mode, Mode::Scrollback(_)), "not a k8s source: its history");
         press(&mut a, KeyCode::Enter);
         assert!(matches!(a.mode, Mode::Detail(_)), "then a line");
-        press(&mut a, KeyCode::Backspace);
-        press(&mut a, KeyCode::Backspace);
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Esc);
         assert!(matches!(a.mode, Mode::Panes), "and back up");
     }
 

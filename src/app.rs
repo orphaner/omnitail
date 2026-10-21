@@ -378,6 +378,8 @@ pub struct App {
     pub quit: bool,
     /// A single source: its history is the whole app, `q` there quits.
     pub solo: bool,
+    /// `Esc` asked to quit: a popup waits for `y`/`Enter` (anything else stays).
+    pub confirm_quit: bool,
     /// Shown in the key bar until the next key.
     pub notice: Option<String>,
     /// Text for the terminal clipboard, sent by the event loop.
@@ -423,6 +425,7 @@ impl App {
             history: Vec::new(),
             quit: false,
             solo: false,
+            confirm_quit: false,
             notice: None,
             clipboard: None,
             arrival: 0,
@@ -683,7 +686,8 @@ impl App {
     /// Back to the first screen (`Esc`); quits from there.
     fn home(&mut self) {
         if self.stack.len() == self.home_depth {
-            self.quit = true;
+            // Esc is easily pressed once too often: ask first (q does not).
+            self.confirm_quit = true;
         } else if self.stack.len() > self.home_depth {
             self.panes = self.stack.swap_remove(self.home_depth);
             self.stack.truncate(self.home_depth);
@@ -710,6 +714,10 @@ impl App {
         }
         if let Some(prompt) = self.prompt.take() {
             self.prompt_key(prompt, key);
+            return;
+        }
+        if std::mem::take(&mut self.confirm_quit) {
+            self.quit = matches!(key.code, KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter);
             return;
         }
         if let Some(help) = self.help.take() {
@@ -888,10 +896,12 @@ impl App {
         let page = sb.page.max(1);
         let selected = current.and_then(|p| view.line(p)).map(|l| (l.pane, l.seq));
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
+            KeyCode::Char('q') => {
                 self.quit = self.solo;
                 return;
             }
+            KeyCode::Esc if self.solo => self.confirm_quit = true,
+            KeyCode::Esc => return,
             KeyCode::Up | KeyCode::Char('k') => sb.cursor = step(1, false),
             KeyCode::Down | KeyCode::Char('j') => sb.cursor = down(1),
             KeyCode::PageUp | KeyCode::Char('u') => sb.cursor = step(page, false),
@@ -1426,11 +1436,24 @@ mod tests {
 
     #[test]
     fn quit_keys() {
-        for code in [KeyCode::Char('q'), KeyCode::Esc] {
-            let mut a = app(2);
-            press(&mut a, code);
-            assert!(a.quit);
-        }
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('q'));
+        assert!(a.quit, "q quits at once");
+        let mut a = app(2);
+        press(&mut a, KeyCode::Esc);
+        assert!(a.confirm_quit && !a.quit, "Esc asks first");
+        press(&mut a, KeyCode::Char('j'));
+        assert!(!a.confirm_quit && !a.quit, "any other key stays");
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Esc);
+        assert!(!a.quit, "Esc twice stays too");
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Char('y'));
+        assert!(a.quit);
+        let mut a = app(2);
+        press(&mut a, KeyCode::Esc);
+        press(&mut a, KeyCode::Enter);
+        assert!(a.quit);
         let mut a = app(2);
         press(&mut a, KeyCode::Char('b'));
         a.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
@@ -1512,6 +1535,8 @@ mod tests {
         press(&mut a, KeyCode::Char('q'));
         assert!(matches!(a.mode, Mode::Scrollback(_)) && !a.quit, "detail goes back to the history");
         press(&mut a, KeyCode::Esc);
+        assert!(a.confirm_quit && matches!(a.mode, Mode::Scrollback(_)), "asks, over the history");
+        press(&mut a, KeyCode::Char('y'));
         assert!(a.quit);
     }
 
@@ -1640,7 +1665,7 @@ mod tests {
         assert!(a.panes[0].name.ends_with("shop-1-aaaaa") && a.panes.len() == 3 && !a.quit, "Esc: back up to it");
         assert_eq!(a.stack.len(), 1);
         press(&mut a, KeyCode::Esc);
-        assert!(a.quit, "Esc quits from the first screen");
+        assert!(a.confirm_quit, "Esc on the first screen asks to quit");
     }
 
     #[test]

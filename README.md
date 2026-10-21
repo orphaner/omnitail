@@ -80,7 +80,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | Key | Action |
 |---|---|
 | `h` / `F1` | keys of the current view (`Tab`: all keys, `Esc` closes it) |
-| `q` / `Esc` | quit (or go back from a popup or the scrollback; `Esc` after splitting panes goes back to the first screen) |
+| `q` / `Esc` | quit (or go back from a popup or the scrollback; `Esc` after splitting panes goes back to the first screen, and on the first screen asks before quitting) |
 | `Ctrl+C` | quit from anywhere |
 | `C` / `c` | clear all panes / one pane (the history is kept) |
 | `b` | choose a pane and browse its whole history, including what was cleared |

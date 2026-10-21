@@ -35,6 +35,26 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
     frame.render_stateful_widget(list, popup, &mut ListState::default().with_selected(Some(selected)));
 }
 
+/// `Esc` on the first screen: quit for real?
+pub fn render_quit(frame: &mut Frame, area: Rect) {
+    let text = Line::from(vec![
+        Span::styled(" y Enter ", Style::new().fg(WHITE).bg(BADGE_BG)),
+        Span::raw(" quit   "),
+        Span::styled(" any key ", Style::new().fg(WHITE).bg(BADGE_BG)),
+        Span::raw(" stay "),
+    ]);
+    let popup = centered(area, text.width() as u16 + 4, 3);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .title(" Quit omnitail? ")
+        .border_style(Style::new().fg(ACCENT));
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(text).centered().block(block).style(Style::new().fg(BAR_FG).bg(POPUP_BG)),
+        popup,
+    );
+}
+
 /// The scheme chooser: a filter line, then the matching schemes.
 pub fn render_schemes(frame: &mut Frame, area: Rect, picker: &SchemePicker, entries: &[SchemeEntry], current: &str) {
     let name_w = entries.iter().map(|e| e.name.len()).max().unwrap_or(4).max(10);

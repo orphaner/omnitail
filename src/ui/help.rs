@@ -33,7 +33,7 @@ pub const PANES: Section = Section {
         ("Backspace", "back to the screen before the split"),
         ("h F1", "this help"),
         ("q", "quit"),
-        ("Esc", "back to the first screen, or quit"),
+        ("Esc", "back to the first screen, or quit (asks)"),
         ("Ctrl+C", "quit, from anywhere"),
     ],
 };

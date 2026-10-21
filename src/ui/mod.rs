@@ -121,6 +121,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         let entries = app.scheme_entries(&picker.query);
         popup::render_schemes(frame, main, picker, &entries, &app.panes[picker.pane].color.choice);
     }
+    if app.confirm_quit {
+        popup::render_quit(frame, main);
+    }
     if let Some(help) = &mut app.help {
         help::render(frame, frame.area(), help, &app.mode);
         return;

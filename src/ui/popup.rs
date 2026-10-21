@@ -11,7 +11,7 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
     let title = match purpose {
         SelectPurpose::Scrollback => " Scrollback ",
         SelectPurpose::Find { .. } => " Search in ",
-        SelectPurpose::Split => " Split into pods / containers ",
+        SelectPurpose::Open => " Open ",
         SelectPurpose::Clear => " Clear ",
         SelectPurpose::Pause => " Pause/resume ",
         SelectPurpose::Filter => " Filter ",

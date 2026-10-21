@@ -37,7 +37,7 @@ Sources:
 
 Container sources (docker, compose, k8s) restart when their stream ends, resuming where it stopped.
 
-A k8s source looks at the pods its target runs when omnitail starts, and follows them all, with all their containers (native sidecars included, init containers left out; `-c app` picks one). Its pane mixes them, each line behind badges naming its pod (`xk2p9`, the end of a replica's name, one color per pod everywhere) and its container. `Enter` splits a pane into one pane per pod, then a pod's pane into one per container; `Backspace` goes back up. A single k8s source opens on its pods already (or its containers, for a single pod). Formats are guessed per container, so a pane mixing JSON and access logs colors both. `e` filters on pods and containers too. [`demo-k8s/`](demo-k8s) has workloads covering these cases.
+A k8s source looks at the pods its target runs when omnitail starts, and follows them all, with all their containers (native sidecars included, init containers left out; `-c app` picks one). Its pane mixes them, each line behind badges naming its pod (`xk2p9`, the end of a replica's name, one color per pod everywhere) and its container. `Enter` splits a pane into one pane per pod, then a pod's pane into one per container, then opens a container's history; `Backspace` goes back up. A single k8s source opens on its pods already (or its containers, for a single pod). Formats are guessed per container, so a pane mixing JSON and access logs colors both. `e` filters on pods and containers too. [`demo-k8s/`](demo-k8s) has workloads covering these cases.
 
 Without any source, omnitail follows the compose project of the current directory (`compose.yaml`, `compose.yml`, `docker-compose.yaml` or `docker-compose.yml`), one pane per service. With a single source, it opens straight on its full-screen history (see [Keys](#keys)), following the end like `tail -f`; `q` quits.
 
@@ -83,7 +83,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `q` / `Esc` | quit (or go back from a popup or the scrollback; `Esc` after splitting panes goes back to the first screen, and on the first screen asks before quitting) |
 | `Ctrl+C` | quit from anywhere |
 | `C` / `c` | clear all panes / one pane (the history is kept) |
-| `b` | choose a pane and browse its whole history, including what was cleared |
+| `b` | choose a pane and browse its whole history, including what was cleared (even a k8s pane that `Enter` would split) |
 | `B` | browse all panes' histories merged, in arrival order |
 | `/` / `?` | search: matches are highlighted in every view, and the search carries over from one view to the next (empty to remove) |
 | `n` / `N` | choose a pane and open its history on the next / previous match |
@@ -93,7 +93,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none` for no colors, or any scheme) |
 | `S` | omnitail's coloring on/off for all panes |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
-| `Enter` / `Backspace` | split a k8s pane into its pods, then a pod into its containers / back up one level (`Esc`: back to the first screen) |
+| `Enter` / `Backspace` | one level down / up: a k8s pane opens on its pods, then a pod on its containers, and any other pane on its history; in a history, `Enter` shows the line (`Esc`: back to the first screen) |
 
 Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows and `Enter`).
 

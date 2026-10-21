@@ -270,7 +270,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("P p", "Pause"),
             ("s S", "Scheme/Colors"),
             ("w", "Wrap"),
-            ("⏎ ⌫", "Split"),
+            ("⏎ ⌫", "Open/Back"),
         ],
         Mode::Schemes(_) => &[("Esc", "Cancel"), ("↑↓", "Choose"), ("Enter", "Apply"), ("abc", "Filter")],
         Mode::Select { .. } => &[("↑↓", "Choose"), ("Enter", "OK"), ("1-9", "Pick"), ("Esc", "Cancel")],

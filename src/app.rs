@@ -158,7 +158,8 @@ pub enum SelectPurpose {
     Scrollback,
     /// The history of a pane, on the next (or previous) match of the search.
     Find { forward: bool },
-    Split,
+    /// One level down (`Enter`): its pods or containers, else its history.
+    Open,
     Clear,
     Pause,
     Filter,
@@ -856,7 +857,7 @@ impl App {
             }
             KeyCode::Char('/') | KeyCode::Char('?') => self.search_prompt(key.code == KeyCode::Char('/')),
             KeyCode::Char('w') => self.wrap = !self.wrap,
-            KeyCode::Enter => self.select(SelectPurpose::Split),
+            KeyCode::Enter => self.select(SelectPurpose::Open),
             KeyCode::Backspace => self.unsplit(),
             _ => {}
         }
@@ -901,7 +902,8 @@ impl App {
                 return;
             }
             KeyCode::Esc if self.solo => self.confirm_quit = true,
-            KeyCode::Esc => return,
+            // Back up to the panes (a single source has none to go to).
+            KeyCode::Esc | KeyCode::Backspace if !self.solo => return,
             KeyCode::Up | KeyCode::Char('k') => sb.cursor = step(1, false),
             KeyCode::Down | KeyCode::Char('j') => sb.cursor = down(1),
             KeyCode::PageUp | KeyCode::Char('u') => sb.cursor = step(page, false),
@@ -992,7 +994,7 @@ impl App {
     fn detail_key(&mut self, mut d: Detail, key: KeyEvent) {
         let page = d.page.max(1);
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter => {
+            KeyCode::Char('q') | KeyCode::Esc | KeyCode::Enter | KeyCode::Backspace => {
                 self.mode = Mode::Scrollback(d.back);
                 return;
             }
@@ -1187,8 +1189,8 @@ impl App {
         self.mode = Mode::Panes;
         match purpose {
             SelectPurpose::Clear => self.panes[pane].buffer.clear_view(Local::now(), "cleared"),
-            SelectPurpose::Split => self.split(pane),
-            SelectPurpose::Scrollback | SelectPurpose::Find { .. } => {
+            SelectPurpose::Open if !self.children(&self.panes[pane]).is_empty() => self.split(pane),
+            SelectPurpose::Scrollback | SelectPurpose::Find { .. } | SelectPurpose::Open => {
                 let p = &self.panes[pane];
                 let mut history = self.history_view(Target::Pane(pane), p.filter.clone(), p.level);
                 if let SelectPurpose::Find { forward } = purpose {
@@ -1682,7 +1684,9 @@ mod tests {
         assert_eq!(a.panes.len(), 2);
         press(&mut a, KeyCode::Enter);
         press(&mut a, KeyCode::Char('1'));
-        assert!(a.notice.as_ref().unwrap().contains("nothing to split"));
+        assert!(matches!(&a.mode, Mode::Scrollback(sb) if sb.target == Target::Pane(0)), "nothing below: its history");
+        press(&mut a, KeyCode::Backspace);
+        assert!(matches!(a.mode, Mode::Panes) && a.panes.len() == 2, "Backspace: back to the panes");
 
         let mut a = shop(pods(&["db-0"], &["db"]));
         a.start();
@@ -1691,7 +1695,12 @@ mod tests {
         let mut a = app(2);
         press(&mut a, KeyCode::Enter);
         press(&mut a, KeyCode::Enter);
-        assert!(a.notice.as_ref().unwrap().contains("nothing to split"), "not a k8s source");
+        assert!(matches!(a.mode, Mode::Scrollback(_)), "not a k8s source: its history");
+        press(&mut a, KeyCode::Enter);
+        assert!(matches!(a.mode, Mode::Detail(_)), "then a line");
+        press(&mut a, KeyCode::Backspace);
+        press(&mut a, KeyCode::Backspace);
+        assert!(matches!(a.mode, Mode::Panes), "and back up");
     }
 
     #[test]

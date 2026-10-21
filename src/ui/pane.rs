@@ -45,6 +45,7 @@ pub fn render(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, opts: &P
         wrap: opts.wrap,
         hscroll: 0,
         highlight: opts.highlight,
+        filter: pane.filter.as_ref(),
     };
     let start = pane.buffer.view_start();
     let end = pane.view_end().max(start);
@@ -98,7 +99,7 @@ mod tests {
         for l in ["one", "abcdef", "z"] {
             b.push(l.into());
         }
-        let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None };
+        let render = Render { width: 3, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None, filter: None };
         let all = |_: &Entry| true;
         assert_eq!(plain(tail_rows(&b, 0, 3, 2, |e| render.rows(&e.text), all)), ["def", "z"]);
         assert_eq!(plain(tail_rows(&b, 2, 3, 5, |e| render.rows(&e.text), all)), ["z"], "lines before start (cleared) are hidden");

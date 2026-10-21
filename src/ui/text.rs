@@ -22,6 +22,8 @@ pub struct Render<'a> {
     pub hscroll: usize,
     /// Matches stand out, over any other styling.
     pub highlight: Option<&'a Pattern>,
+    /// What the filter matched, marked less loudly (under the search).
+    pub filter: Option<&'a Pattern>,
 }
 
 impl Render<'_> {
@@ -31,8 +33,12 @@ impl Render<'_> {
     pub fn rows(&self, raw: &str) -> Vec<Line<'static>> {
         let mut out = Vec::new();
         for line in self.styled(raw) {
+            let line = match self.filter {
+                Some(pattern) => highlight(line, pattern, super::FILTER_MATCH),
+                None => line,
+            };
             let line = match self.highlight {
-                Some(pattern) => highlight(line, pattern),
+                Some(pattern) => highlight(line, pattern, super::HIGHLIGHT),
                 None => line,
             };
             if self.wrap {
@@ -67,7 +73,7 @@ impl Render<'_> {
 }
 
 /// Patches the style of the text `pattern` matches.
-fn highlight(line: Line<'static>, pattern: &Pattern) -> Line<'static> {
+fn highlight(line: Line<'static>, pattern: &Pattern, style: Style) -> Line<'static> {
     let text = line.to_string();
     let ranges = pattern.find_ranges(&text);
     if ranges.is_empty() {
@@ -78,7 +84,7 @@ fn highlight(line: Line<'static>, pattern: &Pattern) -> Line<'static> {
     for span in &line.spans {
         for c in span.content.chars() {
             let hit = ranges.iter().any(|r| r.contains(&offset));
-            cells.push((c, if hit { span.style.patch(super::HIGHLIGHT) } else { span.style }));
+            cells.push((c, if hit { span.style.patch(style) } else { span.style }));
             offset += c.len_utf8();
         }
     }
@@ -204,7 +210,7 @@ mod tests {
     }
 
     fn render(width: usize) -> Render<'static> {
-        Render { width, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None }
+        Render { width, strip: false, scheme: None, wrap: true, hscroll: 0, highlight: None, filter: None }
     }
 
     #[test]
@@ -272,6 +278,19 @@ mod tests {
         let rows = r.rows("\x1b[34mERROR\x1b[0m and err");
         let hits: Vec<_> = rows[0].spans.iter().filter(|s| s.style.bg == super::super::HIGHLIGHT.bg).map(|s| s.content.to_string()).collect();
         assert_eq!(hits, ["ERR", "err"]);
+    }
+
+    #[test]
+    fn filter_matches_are_marked_under_the_search() {
+        let filter = Pattern::parse("error", false).unwrap();
+        let search = Pattern::parse("or", false).unwrap();
+        let r = Render { filter: Some(&filter), highlight: Some(&search), ..render(80) };
+        let styles: Vec<_> = r.rows("an error")[0].spans.iter().map(|s| (s.content.to_string(), s.style.bg)).collect();
+        let (filtered, searched) = (super::super::FILTER_MATCH.bg, super::super::HIGHLIGHT.bg);
+        assert_eq!(styles, [("an ".into(), None), ("err".into(), filtered), ("or".into(), searched)]);
+        let negated = Pattern::parse("!error", true).unwrap();
+        let r = Render { filter: Some(&negated), ..render(80) };
+        assert_eq!(r.rows("an error")[0].spans.len(), 1, "nothing to mark for !pattern");
     }
 
     #[test]

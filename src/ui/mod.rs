@@ -82,6 +82,8 @@ fn prefixed_rows(render: &text::Render, text: &str, prefix: Vec<Span<'static>>) 
 
 /// Search and highlight matches.
 const HIGHLIGHT: Style = Style::new().fg(BLACK).bg(Color::Indexed(221));
+/// What a filter (`e`, `&`) matched: quieter than the search.
+const FILTER_MATCH: Style = Style::new().fg(BLACK).bg(Color::Indexed(116));
 
 fn split_screen(area: Rect) -> [Rect; 2] {
     Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area)

@@ -36,7 +36,8 @@ pub fn render(
 ) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     let scheme = pane.buffer.entry(d.seq).map_or(pane.color.active(), |e| pane.scheme_for(e));
-    let render = Render { width: body.width as usize, strip, scheme, wrap: true, hscroll: 0, highlight };
+    let filter = d.back.filter.as_ref();
+    let render = Render { width: body.width as usize, strip, scheme, wrap: true, hscroll: 0, highlight, filter };
 
     let (rows, kind) = match pane.buffer.get(d.seq) {
         None => (vec![Line::styled("(this line is no longer in history)", super::dim())], ""),

@@ -117,6 +117,7 @@ impl Painter<'_> {
             wrap: self.opts.wrap,
             hscroll: self.hscroll,
             highlight: self.highlight,
+            filter: self.view.filter(),
         };
         let is_cursor = Some(pos) == cursor;
         for row in super::prefixed_rows(&render, &line.entry.text, prefix) {

@@ -87,7 +87,7 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `B` | browse all panes' histories merged, in arrival order |
 | `/` / `?` | search: matches are highlighted in every view, and the search carries over from one view to the next (empty to remove) |
 | `n` / `N` | choose a pane and open its history on the next / previous match |
-| `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove); `&` is `E` |
+| `E` / `e` | filter all panes / one pane: `error` shows matching lines, with what matched marked in pale cyan (the search stays yellow), `!info` hides them (empty to remove); `&` is `E` |
 | `L` / `l` | levels shown in all panes / one pane: all, debug+, info+, warn+, error (see [Levels](#levels)) |
 | `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
 | `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none` for no colors, or any scheme) |

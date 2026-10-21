@@ -89,6 +89,11 @@ impl<'a> HistoryView<'a> {
     }
 
     /// Oldest retained position.
+    /// The view's filter (`&`), to mark what it matched.
+    pub fn filter(&self) -> Option<&'a Pattern> {
+        self.filter
+    }
+
     pub fn first(&self) -> Pos {
         match self.target {
             Target::Pane(p) => self.panes[*p].buffer.first_seq(),

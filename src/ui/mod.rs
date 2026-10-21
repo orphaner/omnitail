@@ -103,7 +103,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             let opts = scrollback::ScrollbackOptions { strip: app.strip_ansi, wrap: app.wrap, times: app.times };
             scrollback::render(frame, main, sb, &app.panes, &opts)
         }
-        Mode::Detail(d) => detail::render(frame, main, d, &app.panes[d.pane], app.strip_ansi, json.as_deref()),
+        Mode::Detail(d) => {
+            detail::render(frame, main, d, &app.panes[d.pane], app.strip_ansi, json.as_deref(), app.highlight.as_ref())
+        }
         Mode::Panes | Mode::Select { .. } | Mode::Schemes(_) => {
             let opts = pane::PaneOptions { strip: app.strip_ansi, wrap: app.wrap, highlight: app.highlight.as_ref() };
             let areas = Stacked.areas(main, app.panes.len());
@@ -257,12 +259,11 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("q", "Quit"),
             ("h", "Help"),
             ("b B", "History"),
-            ("/", "Highlight"),
+            ("/ n", "Search"),
             ("E e", "Filter"),
-            ("N n", "Clear"),
+            ("C c", "Clear"),
             ("P p", "Pause"),
-            ("C c", "Colors"),
-            ("s", "Scheme"),
+            ("s S", "Scheme/Colors"),
             ("w", "Wrap"),
             ("⏎ ⌫", "Split"),
         ],
@@ -277,6 +278,7 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("n N", "Next"),
             ("&", "Filter"),
             ("Enter", "Detail"),
+            ("C c", "Clear"),
             ("y", "Copy"),
             ("p", "Pause"),
             ("t", "Time"),
@@ -291,19 +293,23 @@ fn render_keys(frame: &mut Frame, area: Rect, app: &App) {
             ("n N", "Next"),
             ("&", "Filter"),
             ("Enter", "Detail"),
+            ("C c", "Clear"),
             ("y", "Copy"),
             ("p", "Pause"),
             ("t", "Time"),
             ("w", "Wrap"),
         ],
-        Mode::Detail(_) => &[
+        // Scrolling only matters for a line longer than the screen.
+        Mode::Detail(d) if d.max_scroll > 0 => &[
             ("q", "Back"),
             ("h", "Help"),
             ("←→", "Prev/next line"),
             ("↑↓ jk", "Scroll"),
             ("PgUp PgDn", "Page"),
+            ("/", "Search"),
             ("y", "Copy"),
         ],
+        Mode::Detail(_) => &[("q", "Back"), ("h", "Help"), ("←→", "Prev/next line"), ("/", "Search"), ("y", "Copy")],
     };
     // With a single source, its history is the top view: q leaves omnitail.
     let quits = app.solo && matches!(app.mode, Mode::Scrollback(_));
@@ -444,7 +450,7 @@ mod tests {
     #[test]
     fn clear_then_scrollback_shows_everything() {
         let mut app = demo();
-        press(&mut app, KeyCode::Char('N'));
+        press(&mut app, KeyCode::Char('C'));
         app.ingest(0, SourceEvent::Line("fresh".into()));
         let s = screen(&mut app);
         assert!(s.contains("(20 hidden)") && s.contains("fresh") && !s.contains("a19"), "{s}");

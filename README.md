@@ -82,16 +82,16 @@ A line's level is read from the line itself, whatever the format: a JSON field (
 | `h` / `F1` | keys of the current view (`Tab`: all keys, `Esc` closes it) |
 | `q` / `Esc` | quit (or go back from a popup or the scrollback; `Esc` after splitting panes goes back to the first screen) |
 | `Ctrl+C` | quit from anywhere |
-| `N` | clear all panes (the history is kept) |
-| `n` | choose one pane to clear |
+| `C` / `c` | clear all panes / one pane (the history is kept) |
 | `b` | choose a pane and browse its whole history, including what was cleared |
 | `B` | browse all panes' histories merged, in arrival order |
-| `/` | highlight a pattern in all panes, live (empty to remove) |
-| `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove) |
+| `/` / `?` | search: matches are highlighted in every view, and the search carries over from one view to the next (empty to remove) |
+| `n` / `N` | choose a pane and open its history on the next / previous match |
+| `E` / `e` | filter all panes / one pane: `error` shows matching lines, `!info` hides them (empty to remove); `&` is `E` |
 | `L` / `l` | levels shown in all panes / one pane: all, debug+, info+, warn+, error (see [Levels](#levels)) |
 | `P` / `p` | pause/resume all panes / one pane (lines keep arriving in the history) |
-| `C` / `c` | omnitail's coloring on/off for all panes / one pane |
-| `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none`, or any scheme) |
+| `s` | choose a pane's color scheme in a list you can filter by typing (`auto`, `none` for no colors, or any scheme) |
+| `S` | omnitail's coloring on/off for all panes |
 | `w` | wrap long lines at word boundaries, or cut them (`›`) |
 | `Enter` / `Backspace` | split a k8s pane into its pods, then a pod into its containers / back up one level (`Esc`: back to the first screen) |
 
@@ -99,7 +99,7 @@ Uppercase keys act on all panes; lowercase ones open a picker (`1`-`9` or arrows
 
 Patterns are regular expressions with smart case: case-insensitive unless they contain an uppercase letter. The prompt keeps a history (`↑`/`↓`).
 
-In the history views (`b`, `B`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. Once the cursor leaves the last line, the view stays put as lines arrive, and the title counts them (`↓ +12`). As in `less`, `/` and `?` search down and up (wrapping around), `n`/`N` go to the next match in the same/other direction, and `&pattern` shows only matching lines (`&!pattern` hides them). A pane's history starts with that pane's filter and level; `l` changes the level of the view only. `p` pauses the view (searches stay within what was there), `t` shows when each line arrived, and in a pane's history `c`/`s` toggle its colors and choose its scheme. `Enter` shows the selected line on its own, with JSON pretty-printed even after a prefix (`[pod/x] {…}`); `←`/`→` move to the previous/next line of the view. `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").
+In the history views (`b`, `B`), a cursor selects a line: `j`/`k`, `PgUp`/`PgDn`, `g`/`G` (back to following the end), `←`/`→` when lines are cut. Once the cursor leaves the last line, the view stays put as lines arrive, and the title counts them (`↓ +12`). As in `less`, `/` and `?` search down and up (wrapping around), `n`/`N` go to the next match in the same/other direction, and `&pattern` shows only matching lines (`&!pattern` hides them). `c`/`C` clear the pane / all panes from there too: the view starts afresh below the clear mark, and older lines are still above it. A pane's history starts with that pane's filter and level; `l` changes the level of the view only. `p` pauses the view (searches stay within what was there), `t` shows when each line arrived, `s` chooses the pane's scheme and `S` turns colors on/off. `Enter` shows the selected line on its own (where `/` searches too), with JSON pretty-printed even after a prefix (`[pod/x] {…}`); `←`/`→` move to the previous/next line of the view. `y` copies the line to the clipboard: locally through `pbcopy`, `wl-copy`, `xclip` or `xsel`; over SSH through OSC 52, which the terminal must allow (iTerm2: Settings → General → Selection → "Applications in terminal may access clipboard").
 
 ## License
 

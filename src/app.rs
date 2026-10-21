@@ -156,9 +156,10 @@ impl Pane {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectPurpose {
     Scrollback,
+    /// The history of a pane, on the next (or previous) match of the search.
+    Find { forward: bool },
     Split,
     Clear,
-    Color,
     Pause,
     Filter,
     Scheme,
@@ -220,6 +221,9 @@ pub struct Scrollback {
     /// Where the view ended when the cursor stopped following it, to count
     /// the lines that arrived since (written by the renderer).
     pub left_end: Option<Pos>,
+    /// Set by clearing (`c`/`C`): while following, the view starts here,
+    /// as cleared panes do; moving up still reaches older lines.
+    pub floor: Option<Pos>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -234,9 +238,20 @@ pub struct Search {
     pub counted: Pos,
 }
 
+impl Search {
+    fn new(pattern: Pattern, forward: bool) -> Self {
+        Self { pattern, forward, rank: 0, total: 0, counted: 0 }
+    }
+
+    /// Counts are stale (the view changed): the next `n` counts again.
+    fn recount(&mut self) {
+        (self.rank, self.total) = (0, 0);
+    }
+}
+
 impl Scrollback {
     fn new(target: Target, filter: Option<Pattern>, level: Option<Level>) -> Self {
-        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None, level, left_end: None }
+        Self { target, cursor: None, top: 0, page: 0, hscroll: 0, filter, search: None, paused: None, level, left_end: None, floor: None }
     }
 
     #[cfg(test)]
@@ -311,8 +326,6 @@ pub enum PromptKind {
     ViewFilter,
     /// `E` (all panes) or `e` (one).
     PaneFilter(Option<usize>),
-    /// `/` on the panes: highlight everywhere.
-    Highlight,
 }
 
 /// A one-line text input shown in the key bar.
@@ -340,7 +353,6 @@ impl Prompt {
             PromptKind::ViewFilter => "&".into(),
             PromptKind::PaneFilter(None) => "filter all (!x excludes): ".into(),
             PromptKind::PaneFilter(Some(p)) => format!("filter {} (!x excludes): ", p + 1),
-            PromptKind::Highlight => "highlight: ".into(),
         }
     }
 
@@ -436,7 +448,8 @@ impl App {
     fn start_solo(&mut self) {
         if let [pane] = &self.panes[..] {
             self.solo = true;
-            self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(0), pane.filter.clone(), pane.level));
+            let history = self.history_view(Target::Pane(0), pane.filter.clone(), pane.level);
+            self.mode = Mode::Scrollback(history);
         }
     }
 
@@ -797,27 +810,23 @@ impl App {
         match key.code {
             KeyCode::Char('q') => self.quit = true,
             KeyCode::Esc => self.home(),
-            KeyCode::Char('N') => {
-                let now = Local::now();
-                self.panes.iter_mut().for_each(|p| p.buffer.clear_view(now, "cleared"));
-            }
-            KeyCode::Char('n') => self.select(SelectPurpose::Clear),
+            KeyCode::Char('C') => self.clear_all(),
+            KeyCode::Char('c') => self.select(SelectPurpose::Clear),
+            KeyCode::Char('n') | KeyCode::Char('N') => match self.highlight {
+                Some(_) => self.select(SelectPurpose::Find { forward: key.code == KeyCode::Char('n') }),
+                None => self.notice = Some("no search: / to search".into()),
+            },
             KeyCode::Char('b') => self.select(SelectPurpose::Scrollback),
             KeyCode::Char('B') => {
                 let target = Target::Merged(Merged::build(&self.panes));
-                self.mode = Mode::Scrollback(Scrollback::new(target, None, self.shared_level()))
+                self.mode = Mode::Scrollback(self.history_view(target, None, self.shared_level()))
             }
             KeyCode::Char('l') => self.select(SelectPurpose::Level),
             KeyCode::Char('L') => {
                 let level = Level::cycle(self.shared_level());
                 self.panes.iter_mut().for_each(|p| p.level = level);
             }
-            KeyCode::Char('c') => self.select(SelectPurpose::Color),
-            KeyCode::Char('C') => {
-                // Off if any pane is colored, otherwise on everywhere.
-                let on = !self.panes.iter().any(|p| p.color.active().is_some());
-                self.panes.iter_mut().filter(|p| p.color.available()).for_each(|p| p.color.enabled = on);
-            }
+            KeyCode::Char('S') => self.toggle_colors(),
             KeyCode::Char('p') => self.select(SelectPurpose::Pause),
             KeyCode::Char('P') => {
                 // Pause everything unless everything is already paused.
@@ -830,17 +839,14 @@ impl App {
             }
             KeyCode::Char('e') => self.select(SelectPurpose::Filter),
             KeyCode::Char('s') => self.select(SelectPurpose::Scheme),
-            KeyCode::Char('E') => {
+            KeyCode::Char('E') | KeyCode::Char('&') => {
                 // Start from the common filter, if all panes share one.
                 let first = self.panes[0].filter.as_ref().map(|f| f.text.clone());
                 let shared = self.panes.iter().all(|p| p.filter.as_ref().map(|f| &f.text) == first.as_ref());
                 let input = if shared { first.unwrap_or_default() } else { String::new() };
                 self.prompt = Some(Prompt::new(PromptKind::PaneFilter(None), input));
             }
-            KeyCode::Char('/') => {
-                let input = self.highlight.as_ref().map(|h| h.text.clone()).unwrap_or_default();
-                self.prompt = Some(Prompt::new(PromptKind::Highlight, input));
-            }
+            KeyCode::Char('/') | KeyCode::Char('?') => self.search_prompt(key.code == KeyCode::Char('/')),
             KeyCode::Char('w') => self.wrap = !self.wrap,
             KeyCode::Enter => self.select(SelectPurpose::Split),
             KeyCode::Backspace => self.unsplit(),
@@ -900,12 +906,16 @@ impl App {
             }
             KeyCode::Char('t') => self.times = !self.times,
             // Colors of the pane, from its own history only.
-            KeyCode::Char('c') => {
-                if let Target::Pane(pane) = sb.target {
-                    let color = &mut self.panes[pane].color;
-                    color.enabled = !color.enabled && color.available();
+            KeyCode::Char('c') | KeyCode::Char('C') => {
+                match (sb.target.clone(), key.code) {
+                    (Target::Pane(pane), KeyCode::Char('c')) => self.panes[pane].buffer.clear_view(Local::now(), "cleared"),
+                    _ => self.clear_all(),
                 }
+                // The screen starts afresh below the mark, as a cleared pane.
+                sb.floor = Some(HistoryView::new(&self.panes, &sb.target, None).end());
+                sb.cursor = None;
             }
+            KeyCode::Char('S') => self.toggle_colors(),
             KeyCode::Char('s') => {
                 if let Target::Pane(pane) = sb.target {
                     return self.open_schemes(pane, Some(sb));
@@ -913,7 +923,7 @@ impl App {
             }
             KeyCode::Char('l') => {
                 sb.level = Level::cycle(sb.level);
-                sb.search = None;
+                sb.search.iter_mut().for_each(Search::recount);
             }
             KeyCode::Char('p') => {
                 sb.paused = match sb.paused {
@@ -921,10 +931,7 @@ impl App {
                     None => Some(HistoryView::new(&self.panes, &sb.target, None).end()),
                 }
             }
-            KeyCode::Char('/') | KeyCode::Char('?') => {
-                let forward = key.code == KeyCode::Char('/');
-                self.prompt = Some(Prompt::new(PromptKind::Search { forward }, String::new()));
-            }
+            KeyCode::Char('/') | KeyCode::Char('?') => self.search_prompt(key.code == KeyCode::Char('/')),
             KeyCode::Char('n') | KeyCode::Char('N') => {
                 if let Some(search) = &sb.search {
                     let forward = search.forward == (key.code == KeyCode::Char('n'));
@@ -998,6 +1005,7 @@ impl App {
             KeyCode::PageDown | KeyCode::Char('d') | KeyCode::Char(' ') => d.scroll = (d.scroll + page).min(d.max_scroll),
             KeyCode::Home | KeyCode::Char('g') => d.scroll = 0,
             KeyCode::End | KeyCode::Char('G') => d.scroll = d.max_scroll,
+            KeyCode::Char('/') | KeyCode::Char('?') => self.search_prompt(key.code == KeyCode::Char('/')),
             KeyCode::Char('y') => {
                 let text = self.panes[d.pane].buffer.get(d.seq).map(crate::ui::plain_text);
                 self.copy(text);
@@ -1085,7 +1093,6 @@ impl App {
             self.history.push(input.to_owned());
         }
         match kind {
-            PromptKind::Highlight => self.highlight = pattern,
             PromptKind::PaneFilter(target) => {
                 for (i, pane) in self.panes.iter_mut().enumerate() {
                     if target.is_none_or(|t| t == i) {
@@ -1096,18 +1103,21 @@ impl App {
             PromptKind::ViewFilter => {
                 if let Mode::Scrollback(sb) = &mut self.mode {
                     sb.filter = pattern;
-                    sb.search = None;
+                    sb.search.iter_mut().for_each(Search::recount);
                 }
             }
+            // One search for all views: highlighted everywhere, and in a
+            // history view the cursor goes to the next match. Empty removes it.
             PromptKind::Search { forward } => {
+                self.highlight = pattern.clone();
                 let mut mode = std::mem::replace(&mut self.mode, Mode::Panes);
-                if let Mode::Scrollback(sb) = &mut mode {
-                    // An empty search repeats the previous pattern, as in less.
-                    let pattern = pattern.or_else(|| sb.search.take().map(|s| s.pattern));
-                    if let Some(pattern) = pattern {
-                        sb.search = Some(Search { pattern, forward, rank: 0, total: 0, counted: 0 });
+                match &mut mode {
+                    Mode::Scrollback(sb) => {
+                        sb.search = pattern.map(|p| Search::new(p, forward));
                         self.find(sb, forward);
                     }
+                    Mode::Detail(d) => d.back.search = pattern.map(|p| Search::new(p, forward)),
+                    _ => {}
                 }
                 self.mode = mode;
             }
@@ -1122,6 +1132,30 @@ impl App {
             self.notice = Some("line no longer in history".into());
         }
         self.clipboard = text;
+    }
+
+    /// A history view of `target`, carrying the current search.
+    fn history_view(&self, target: Target, filter: Option<Pattern>, level: Option<Level>) -> Scrollback {
+        let mut history = Scrollback::new(target, filter, level);
+        history.search = self.highlight.clone().map(|p| Search::new(p, true));
+        history
+    }
+
+    /// The search prompt, starting from the current pattern (Enter repeats it).
+    fn search_prompt(&mut self, forward: bool) {
+        let input = self.highlight.as_ref().map(|h| h.text.clone()).unwrap_or_default();
+        self.prompt = Some(Prompt::new(PromptKind::Search { forward }, input));
+    }
+
+    fn clear_all(&mut self) {
+        let now = Local::now();
+        self.panes.iter_mut().for_each(|p| p.buffer.clear_view(now, "cleared"));
+    }
+
+    /// omnitail's coloring off if any pane has it, otherwise on everywhere.
+    fn toggle_colors(&mut self) {
+        let on = !self.panes.iter().any(|p| p.color.active().is_some());
+        self.panes.iter_mut().filter(|p| p.color.available()).for_each(|p| p.color.enabled = on);
     }
 
     /// The level filter all panes have, if they share one.
@@ -1144,16 +1178,16 @@ impl App {
         match purpose {
             SelectPurpose::Clear => self.panes[pane].buffer.clear_view(Local::now(), "cleared"),
             SelectPurpose::Split => self.split(pane),
-            SelectPurpose::Scrollback => {
+            SelectPurpose::Scrollback | SelectPurpose::Find { .. } => {
                 let p = &self.panes[pane];
-                self.mode = Mode::Scrollback(Scrollback::new(Target::Pane(pane), p.filter.clone(), p.level));
+                let mut history = self.history_view(Target::Pane(pane), p.filter.clone(), p.level);
+                if let SelectPurpose::Find { forward } = purpose {
+                    self.find(&mut history, forward);
+                }
+                self.mode = Mode::Scrollback(history);
             }
             SelectPurpose::Level => self.panes[pane].level = Level::cycle(self.panes[pane].level),
             SelectPurpose::Pause => self.panes[pane].toggle_pause(),
-            SelectPurpose::Color => {
-                let color = &mut self.panes[pane].color;
-                color.enabled = !color.enabled && color.available();
-            }
             SelectPurpose::Filter => {
                 let input = self.panes[pane].filter.as_ref().map(|f| f.text.clone()).unwrap_or_default();
                 self.prompt = Some(Prompt::new(PromptKind::PaneFilter(Some(pane)), input));
@@ -1420,27 +1454,27 @@ mod tests {
         let mut a = app(2);
         let enabled = |a: &App| a.panes.iter().map(|p| p.color.enabled).collect::<Vec<_>>();
         assert_eq!(enabled(&a), [true, true]);
-        press(&mut a, KeyCode::Char('c'));
-        assert!(matches!(a.mode, Mode::Select { purpose: SelectPurpose::Color, .. }));
-        press(&mut a, KeyCode::Char('2'));
-        assert_eq!(enabled(&a), [true, false]);
-        press(&mut a, KeyCode::Char('C'));
-        assert_eq!(enabled(&a), [false, false], "some pane colored: C turns all off");
-        press(&mut a, KeyCode::Char('C'));
+        press(&mut a, KeyCode::Char('S'));
+        assert_eq!(enabled(&a), [false, false], "some pane colored: S turns all off");
+        press(&mut a, KeyCode::Char('S'));
         assert_eq!(enabled(&a), [true, true]);
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Char('S'));
+        assert_eq!(enabled(&a), [false, false], "from a history too");
     }
 
     #[test]
     fn clear_all() {
         let mut a = app(2);
-        press(&mut a, KeyCode::Char('N'));
+        press(&mut a, KeyCode::Char('C'));
         assert!(a.panes.iter().all(|p| p.buffer.view_start() == 5));
     }
 
     #[test]
     fn clear_one_through_picker() {
         let mut a = app(3);
-        press(&mut a, KeyCode::Char('n'));
+        press(&mut a, KeyCode::Char('c'));
         assert_eq!(a.mode, Mode::Select { purpose: SelectPurpose::Clear, selected: 0 });
         press(&mut a, KeyCode::Down);
         press(&mut a, KeyCode::Enter);
@@ -1495,7 +1529,7 @@ mod tests {
         press(&mut a, KeyCode::Esc);
         assert!(matches!(a.mode, Mode::Scrollback(_)) && !a.quit, "Esc leaves the popup only");
         let enabled = a.panes[0].color.enabled;
-        press(&mut a, KeyCode::Char('c'));
+        press(&mut a, KeyCode::Char('S'));
         assert_ne!(a.panes[0].color.enabled, enabled);
 
         let mut a = app(2);
@@ -1645,6 +1679,65 @@ mod tests {
         let scheme = |seq| pane.scheme_for(pane.buffer.entry(seq).unwrap()).map(|s| s.name.clone());
         assert_eq!(scheme(0).as_deref(), Some("json+generic"));
         assert_eq!(scheme(1).as_deref(), Some("http+generic"));
+    }
+
+    #[test]
+    fn one_search_for_all_views() {
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('n'));
+        assert_eq!(a.notice.as_deref(), Some("no search: / to search"));
+        press(&mut a, KeyCode::Char('/'));
+        type_text(&mut a, "-3");
+        press(&mut a, KeyCode::Enter);
+        assert_eq!(a.highlight.as_ref().unwrap().text, "-3", "highlighted in the panes");
+
+        // n from the panes: the history of a pane, on the next match.
+        press(&mut a, KeyCode::Char('n'));
+        press(&mut a, KeyCode::Char('2'));
+        let Mode::Scrollback(sb) = &a.mode else { panic!("{:?}", a.mode) };
+        assert_eq!((sb.target.clone(), sb.cursor), (Target::Pane(1), Some(3)));
+        assert_eq!(sb.search.as_ref().unwrap().pattern.text, "-3");
+
+        // Changed in the detail view: the history and the panes follow.
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Char('/'));
+        assert_eq!(a.prompt.as_ref().unwrap().input, "-3", "starts from the current search");
+        press(&mut a, KeyCode::Char('u'));
+        a.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        type_text(&mut a, "1-");
+        press(&mut a, KeyCode::Enter);
+        press(&mut a, KeyCode::Esc);
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert_eq!(sb.search.as_ref().unwrap().pattern.text, "1-");
+        press(&mut a, KeyCode::Char('q'));
+        assert_eq!(a.highlight.as_ref().unwrap().text, "1-");
+
+        // A history opened later carries it; empty removes it everywhere.
+        press(&mut a, KeyCode::Char('B'));
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert!(sb.search.is_some());
+        press(&mut a, KeyCode::Char('/'));
+        a.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        press(&mut a, KeyCode::Enter);
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert!(sb.search.is_none() && a.highlight.is_none());
+    }
+
+    #[test]
+    fn clear_from_a_history_and_ampersand_on_the_panes() {
+        let mut a = app(2);
+        press(&mut a, KeyCode::Char('b'));
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Char('c'));
+        let Mode::Scrollback(sb) = &a.mode else { panic!() };
+        assert_eq!((sb.floor, sb.cursor), (Some(5), None));
+        assert_eq!(a.panes.iter().map(|p| p.buffer.view_start()).collect::<Vec<_>>(), [5, 0], "this pane only");
+        press(&mut a, KeyCode::Char('C'));
+        assert_eq!(a.panes.iter().map(|p| p.buffer.view_start()).collect::<Vec<_>>(), [5, 5]);
+
+        press(&mut a, KeyCode::Char('q'));
+        press(&mut a, KeyCode::Char('&'));
+        assert_eq!(a.prompt.as_ref().unwrap().kind, PromptKind::PaneFilter(None), "& filters all panes, as E");
     }
 
     #[test]
@@ -1974,7 +2067,7 @@ mod tests {
         assert!(matches!(a.mode, Mode::Scrollback(_)), "back where we were");
 
         press(&mut a, KeyCode::Char('q'));
-        press(&mut a, KeyCode::Char('n'));
+        press(&mut a, KeyCode::Char('c'));
         press(&mut a, KeyCode::Char('h'));
         assert!(a.help.is_none(), "not over the pane picker");
     }
@@ -2020,8 +2113,9 @@ mod tests {
         assert_eq!(cursor(&a), Some(1));
         press(&mut a, KeyCode::Char('?'));
         press(&mut a, KeyCode::Enter);
-        assert_eq!(cursor(&a), Some(1), "only one match: wraps onto itself");
+        assert_eq!(cursor(&a), Some(1), "the prompt starts with the search: Enter repeats it, wrapping onto itself");
         press(&mut a, KeyCode::Char('/'));
+        a.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
         type_text(&mut a, "nope");
         press(&mut a, KeyCode::Enter);
         assert!(a.notice.as_ref().unwrap().contains("not found"));

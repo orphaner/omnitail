@@ -26,7 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, sb: &mut Scrollback, panes: &[Pane]
     sb.count_new_matches(panes);
     let view = sb.view(panes);
     let highlight = sb.search.as_ref().map(|s| &s.pattern);
-    let layout = Painter { view, panes, opts, highlight, width: body.width as usize, hscroll: sb.hscroll };
+    let layout = Painter { view, panes, opts, highlight, width: body.width as usize, hscroll: sb.hscroll, floor: sb.floor };
     let shown = layout.layout(sb.cursor, sb.top, body.height as usize);
 
     let position = match sb.cursor {
@@ -85,6 +85,8 @@ struct Painter<'a> {
     highlight: Option<&'a crate::pattern::Pattern>,
     width: usize,
     hscroll: usize,
+    /// Where the view starts while following, after a clear.
+    floor: Option<Pos>,
 }
 
 impl Painter<'_> {
@@ -130,6 +132,17 @@ impl Painter<'_> {
         let (first, end) = (self.view.first(), self.view.end());
         let Some(c) = cursor.and(selected) else {
             // Following: bottom-anchored on the very end, marks after the last line included.
+            // After a clear, from the clear on: its mark on top while it fits.
+            if let Some(floor) = self.floor {
+                let mut used = 0;
+                let fits = (floor..=end).all(|p| {
+                    used += self.rows(p, None).len();
+                    used <= height
+                });
+                if fits {
+                    return self.top_anchored(floor, selected, height);
+                }
+            }
             return self.bottom_anchored(end, selected, height);
         };
         let top = top.clamp(first, end.saturating_sub(1).max(first));
@@ -209,6 +222,7 @@ mod tests {
             highlight: None,
             width: 40,
             hscroll: 0,
+            floor: None,
         };
         let s = layout.layout(cursor, top, height);
         let text = |l: &Line| l.to_string();

@@ -25,6 +25,66 @@ pub fn split_json(text: &str) -> Option<(&str, Value)> {
     None
 }
 
+/// A row of the pretty-printed JSON: JSON itself, or the text of a
+/// multi-line message unfolded (a stack trace), colored as the pane's lines.
+#[derive(Debug, PartialEq, Eq)]
+enum Row {
+    Json(String),
+    Text(String),
+}
+
+/// Fields whose multi-line values are unfolded: `\n`, `\r\n` and `\t`
+/// become real line breaks and indents. Display only, not valid JSON.
+fn unfolds(key: &str) -> bool {
+    let key = key.to_ascii_lowercase();
+    matches!(key.as_str(), "msg" | "message")
+        || ["exception", "stack", "trace", "error"].iter().any(|k| key.contains(k))
+}
+
+/// Like `serde_json::to_string_pretty` (2-space indent, key order kept),
+/// except for the multi-line strings of the fields `unfolds` picks.
+fn pretty(value: &Value) -> Vec<Row> {
+    let mut rows = Vec::new();
+    write(&mut rows, 0, None, value, "", false);
+    rows
+}
+
+fn write(rows: &mut Vec<Row>, indent: usize, key: Option<&str>, value: &Value, comma: &str, unfold: bool) {
+    let pad = " ".repeat(indent);
+    let key_part = key.map(|k| format!("{}: ", serde_json::to_string(k).unwrap_or_default())).unwrap_or_default();
+    let unfold = unfold || key.is_some_and(unfolds);
+    match value {
+        Value::Object(map) if !map.is_empty() => {
+            rows.push(Row::Json(format!("{pad}{key_part}{{")));
+            for (i, (k, v)) in map.iter().enumerate() {
+                write(rows, indent + 2, Some(k), v, if i + 1 < map.len() { "," } else { "" }, false);
+            }
+            rows.push(Row::Json(format!("{pad}}}{comma}")));
+        }
+        Value::Array(items) if !items.is_empty() => {
+            rows.push(Row::Json(format!("{pad}{key_part}[")));
+            for (i, v) in items.iter().enumerate() {
+                write(rows, indent + 2, None, v, if i + 1 < items.len() { "," } else { "" }, unfold);
+            }
+            rows.push(Row::Json(format!("{pad}]{comma}")));
+        }
+        Value::String(s) if unfold && s.contains(['\n', '\r', '\t']) => {
+            let text = s.replace("\r\n", "\n").replace('\r', "\n").replace('\t', "    ");
+            let lines: Vec<&str> = text.lines().collect();
+            let last = lines.len().saturating_sub(1);
+            for (i, line) in lines.iter().enumerate() {
+                let end = if i == last { format!("\"{comma}") } else { String::new() };
+                rows.push(match i {
+                    0 => Row::Json(format!("{pad}{key_part}\"{line}{end}")),
+                    // Continuation lines, under the key.
+                    _ => Row::Text(format!("{pad}    {line}{end}")),
+                });
+            }
+        }
+        _ => rows.push(Row::Json(format!("{pad}{key_part}{}{comma}", serde_json::to_string(value).unwrap_or_default()))),
+    }
+}
+
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -44,9 +104,11 @@ pub fn render(
         Some(raw) => match split_json(&super::plain_text(raw)) {
             Some((prefix, value)) => {
                 let mut rows = if prefix.is_empty() { Vec::new() } else { render.rows(prefix) };
-                let pretty = serde_json::to_string_pretty(&value).unwrap_or_default();
                 let json_render = Render { scheme: json, ..render };
-                rows.extend(pretty.lines().flat_map(|l| json_render.rows(l)));
+                rows.extend(pretty(&value).into_iter().flat_map(|row| match row {
+                    Row::Json(l) => json_render.rows(&l),
+                    Row::Text(l) => render.rows(&l),
+                }));
                 (rows, " · json")
             }
             None => (render.rows(raw), ""),
@@ -87,9 +149,49 @@ mod tests {
         assert!(split_json("42").is_none(), "scalars are not worth a detail view");
     }
 
+    fn text(rows: Vec<Row>) -> String {
+        let lines: Vec<String> = rows
+            .into_iter()
+            .map(|r| match r {
+                Row::Json(l) | Row::Text(l) => l,
+            })
+            .collect();
+        lines.join("\n")
+    }
+
     #[test]
-    fn keeps_key_order_when_pretty_printing() {
-        let (_, v) = split_json(r#"{"z":1,"a":2}"#).unwrap();
-        assert_eq!(serde_json::to_string_pretty(&v).unwrap(), "{\n  \"z\": 1,\n  \"a\": 2\n}");
+    fn pretty_prints_like_serde_keeping_key_order() {
+        for json in [r#"{"z":1,"a":2}"#, r#"{"a":{"b":[1,"x\ny",{}],"c":[]},"msg":"one line","n":null}"#, r#"[true,{"k":"v"}]"#] {
+            let v: Value = serde_json::from_str(json).unwrap();
+            assert_eq!(text(pretty(&v)), serde_json::to_string_pretty(&v).unwrap(), "{json}");
+        }
+    }
+
+    #[test]
+    fn unfolds_multi_line_messages_and_traces() {
+        let v: Value = serde_json::from_str(
+            r#"{"level":"error","message":"boom\r\nsecond","error":{"stack_trace":"java.lang.X: y\n\tat a.B.c(B.java:1)"},"other":"a\nb"}"#,
+        )
+        .unwrap();
+        let rows = pretty(&v);
+        assert_eq!(
+            text(rows),
+            [
+                "{",
+                r#"  "level": "error","#,
+                r#"  "message": "boom"#,
+                r#"      second","#,
+                r#"  "error": {"#,
+                r#"    "stack_trace": "java.lang.X: y"#,
+                r#"            at a.B.c(B.java:1)""#,
+                "  },",
+                r#"  "other": "a\nb""#,
+                "}",
+            ]
+            .join("\n")
+        );
+        assert!(matches!(&pretty(&v)[3], Row::Text(_)), "unfolded lines are colored as text");
+        let tab: Value = serde_json::from_str(r#"{"msg":"a\tb"}"#).unwrap();
+        assert_eq!(text(pretty(&tab)), "{\n  \"msg\": \"a    b\"\n}", "one line stays one row");
     }
 }

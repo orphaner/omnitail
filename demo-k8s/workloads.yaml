@@ -136,8 +136,15 @@ spec:
               while true; do
                 set -- info info info warn error
                 shift $((RANDOM % 5)); level=$1
-                printf '{"time":"%s","level":"%s","msg":"order placed","order_id":%s,"amount":%s.%02d}\n' \
-                  "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 10000)) $((RANDOM % 300)) $((RANDOM % 100))
+                if [ $level = error ]; then
+                  # ECS-like: the stack trace nested in error.stack_trace,
+                  # escaped \n and \t unfolded by omnitail's detail view.
+                  printf '{"time":"%s","level":"error","msg":"order failed","order_id":%s,"error":{"type":"java.lang.IllegalStateException","message":"stock reservation failed\\nafter 3 attempts","stack_trace":"java.lang.IllegalStateException: stock reservation failed\\n\\tat com.example.shop.StockService.reserve(StockService.java:%s)\\n\\tat com.example.shop.OrderService.place(OrderService.java:88)\\nCaused by: org.postgresql.util.PSQLException: deadlock detected\\n\\tat org.postgresql.core.v3.QueryExecutorImpl.receiveErrorResponse(QueryExecutorImpl.java:2725)\\n\\t... 9 more"}}\n' \
+                    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $((RANDOM % 10000)) $((RANDOM % 300 + 1))
+                else
+                  printf '{"time":"%s","level":"%s","msg":"order placed","order_id":%s,"amount":%s.%02d}\n' \
+                    "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $level $((RANDOM % 10000)) $((RANDOM % 300)) $((RANDOM % 100))
+                fi
                 sleep $((RANDOM % 3 + 1))
               done
         - name: proxy

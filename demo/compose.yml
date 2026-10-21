@@ -22,7 +22,8 @@ services:
           sleep 0.7
         done
 
-  # One JSON object per line (detected as `json`).
+  # One JSON object per line (detected as `json`). Errors carry a Java stack
+  # trace in `exception`, with escaped \n and \t (unfolded by the detail view).
   api:
     image: alpine:3
     command:
@@ -32,8 +33,13 @@ services:
         while true; do
           set -- info info info debug warn error
           shift $$((RANDOM % 6)); level=$$1
-          printf '{"time":"%s","level":"%s","msg":"handled request","user_id":%s,"duration_ms":%s,"ok":true}\n' \
-            "$$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $$level $$((RANDOM % 100)) $$((RANDOM % 300))
+          if [ $$level = error ]; then
+            printf '{"time":"%s","level":"error","msg":"request failed\\r\\nuser %s gets a 500","user_id":%s,"exception":"java.lang.IllegalStateException: payment declined\\n\\tat com.example.api.PaymentService.charge(PaymentService.java:%s)\\n\\tat com.example.api.OrderController.create(OrderController.java:57)\\n\\tat jdk.internal.reflect.DirectMethodHandleAccessor.invoke(DirectMethodHandleAccessor.java:103)\\nCaused by: java.net.SocketTimeoutException: Read timed out\\n\\tat java.base/sun.nio.ch.NioSocketImpl.timedRead(NioSocketImpl.java:288)\\n\\t... 12 more","ok":false}\n' \
+              "$$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $$((RANDOM % 100)) $$((RANDOM % 100)) $$((RANDOM % 300 + 1))
+          else
+            printf '{"time":"%s","level":"%s","msg":"handled request","user_id":%s,"duration_ms":%s,"ok":true}\n' \
+              "$$(date -u '+%Y-%m-%dT%H:%M:%SZ')" $$level $$((RANDOM % 100)) $$((RANDOM % 300))
+          fi
           sleep 0.9
         done
 

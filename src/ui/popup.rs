@@ -17,6 +17,7 @@ pub fn render(frame: &mut Frame, area: Rect, purpose: SelectPurpose, selected: u
         SelectPurpose::Filter => " Filter ",
         SelectPurpose::Scheme => " Color scheme ",
         SelectPurpose::Level => " Level filter ",
+        SelectPurpose::Close => " Close ",
     };
     let max_name = (area.width as usize).saturating_sub(8);
     let items: Vec<String> = panes

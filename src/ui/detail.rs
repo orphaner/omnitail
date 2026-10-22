@@ -99,7 +99,7 @@ pub fn render(
     let filter = d.back.filter.as_ref();
     let render = Render { width: body.width as usize, strip, scheme, wrap: true, hscroll: 0, highlight, filter };
 
-    let (rows, kind) = match pane.buffer.get(d.seq) {
+    let (mut rows, kind) = match pane.buffer.get(d.seq) {
         None => (vec![Line::styled("(this line is no longer in history)", super::dim())], ""),
         Some(raw) => match split_json(&super::plain_text(raw)) {
             Some((prefix, value)) => {
@@ -114,6 +114,11 @@ pub fn render(
             None => (render.rows(raw), ""),
         },
     };
+
+    // Where the line comes from: badges in the panes may only hint at it.
+    if let Some(origin) = pane.buffer.entry(d.seq).and_then(|e| e.origin.as_deref()) {
+        rows.splice(0..0, [super::origin_line(origin), Line::default()]);
+    }
 
     let height = body.height as usize;
     d.max_scroll = rows.len().saturating_sub(height);

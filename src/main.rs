@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
     let print_config = cli.print_config;
     let settings = Settings::resolve(cli)?;
     // Before the TUI starts, so that errors (e.g. no compose project) print normally.
-    let sources = source::expand(settings.sources.clone()).await?;
+    let sources = source::expand(settings.sources.clone(), settings.kubectl).await?;
     if print_config {
         print!("{}", settings.to_toml(&sources)?);
         return Ok(());
@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
     // push it out; the default one (a pane's worth) fits in it anyway.
     let tails: Vec<Option<usize>> = sources.iter().map(|s| s.tail.or(settings.tail)).collect();
     for (id, config) in sources.iter().enumerate() {
-        source::build(config, tails[id].unwrap_or(pane_heights[id])).spawn(Emitter::new(id, tx.clone()));
+        source::build(config, tails[id].unwrap_or(pane_heights[id]), settings.kubectl).spawn(Emitter::new(id, tx.clone()));
     }
     drop(tx);
 

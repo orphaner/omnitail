@@ -3,6 +3,7 @@
 
 mod command;
 mod file;
+mod k8s;
 mod stdin;
 mod tools;
 
@@ -11,7 +12,7 @@ use std::fmt;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::spec::{SourceConfig, SourceSpec};
 
@@ -30,6 +31,8 @@ pub enum SourceEvent {
     /// starts over, the scrollback keeps it behind a separator.
     Reset(&'static str),
     Status(SourceStatus),
+    /// The pods a k8s source follows changed (one started or went away).
+    Pods(Vec<crate::spec::K8sPod>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,12 +96,13 @@ pub trait Source: Send {
 }
 
 /// Turns sources that stand for several streams into one source per pane:
-/// compose, one pane per service; k8s, one per container.
-pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
+/// compose, one pane per service. A k8s source learns its pods. `kubectl`:
+/// k8s through the CLI rather than natively.
+pub async fn expand(sources: Vec<SourceConfig>, kubectl: bool) -> Result<Vec<SourceConfig>> {
     let mut out = Vec::new();
     for source in sources {
         if let SourceSpec::K8s { .. } = &source.spec {
-            out.extend(expand_k8s(source).await?);
+            out.extend(expand_k8s(source, kubectl).await?);
             continue;
         }
         let SourceSpec::Compose { services, file } = &source.spec else {
@@ -126,12 +130,20 @@ pub async fn expand(sources: Vec<SourceConfig>) -> Result<Vec<SourceConfig>> {
 
 /// What a k8s source runs: a workload's pods are followed together, and
 /// their names and containers let panes be split later.
-async fn expand_k8s(mut source: SourceConfig) -> Result<Vec<SourceConfig>> {
-    let found = tools::k8s_pods(&k8s_target(&source.spec)).await?;
+async fn expand_k8s(mut source: SourceConfig, kubectl: bool) -> Result<Vec<SourceConfig>> {
+    let target = k8s_target(&source.spec);
+    let found = match kubectl || !k8s::supports(&target) {
+        true => tools::k8s_pods(&target).await?,
+        false => k8s::k8s_pods(&target).await?,
+    };
     if let SourceSpec::K8s { pods, running, container, .. } = &mut source.spec {
         *pods = found.selector;
         *running = found.pods;
         if let Some(c) = container {
+            // kubectl would only say so once running, in the pane.
+            if let Some(pod) = running.iter().find(|p| !p.containers.is_empty() && !p.containers.contains(c)) {
+                bail!("pod {} has no container {c} (it has {})", pod.name, pod.containers.join(", "));
+            }
             running.iter_mut().for_each(|p| p.containers = vec![c.clone()]);
         }
     }
@@ -153,14 +165,20 @@ fn k8s_target(spec: &SourceSpec) -> tools::K8sTarget {
 }
 
 /// `tail`: existing lines to read when the source starts.
-pub fn build(config: &SourceConfig, tail: usize) -> Box<dyn Source> {
+pub fn build(config: &SourceConfig, tail: usize, kubectl: bool) -> Box<dyn Source> {
     let command = |argv| Box::new(CommandSource::new(argv).restart(config.restart()));
     match &config.spec {
         SourceSpec::File { path } => Box::new(FileSource::new(path.clone(), tail)),
         SourceSpec::Cmd { command: c } => Box::new(CommandSource::shell(c).restart(config.restart())),
         SourceSpec::Docker { container } => command(tools::docker(container.clone(), tail)),
         SourceSpec::Compose { services, file } => command(tools::compose(file.clone(), services.clone(), tail)),
-        spec @ SourceSpec::K8s { .. } => command(tools::k8s(k8s_target(spec), tail)),
+        spec @ SourceSpec::K8s { running, .. } => {
+            let target = k8s_target(spec);
+            match k8s::K8sSource::new(&target, running.clone(), tail).filter(|_| !kubectl) {
+                Some(native) => Box::new(native),
+                None => command(tools::k8s(target, tail)),
+            }
+        }
         SourceSpec::Journal { unit } => command(tools::journal(unit.clone(), tail)),
         SourceSpec::Stdin => Box::new(StdinSource),
     }

@@ -1,7 +1,8 @@
 //! Sources backed by external CLIs (docker, kubectl, journalctl). Each
 //! builder returns the command line for a run: the first one shows the last
 //! `lines` lines, later ones (restarts) resume from when the previous ended.
-//! Native clients can replace these later behind the same `Source` trait.
+//! `k8s.rs` follows kubernetes natively; kubectl remains for what it
+//! cannot (`--kubectl`, other kinds, other `kubectl logs` options).
 
 use std::path::{Path, PathBuf};
 
@@ -94,7 +95,7 @@ pub struct K8sTarget {
 
 impl K8sTarget {
     /// A label selector (`app=api`) rather than a named object.
-    fn is_selector(&self) -> bool {
+    pub(super) fn is_selector(&self) -> bool {
         self.target.contains('=')
     }
 
@@ -182,7 +183,7 @@ pub async fn k8s_pods(t: &K8sTarget) -> Result<K8sPods> {
 }
 
 /// The pods of a `kubectl get` answer: one pod, or a list of them.
-fn pods_of(object: &serde_json::Value) -> Vec<K8sPod> {
+pub(super) fn pods_of(object: &serde_json::Value) -> Vec<K8sPod> {
     let pods: Vec<&serde_json::Value> = match object["kind"].as_str() {
         Some("List") => object["items"].as_array().into_iter().flatten().collect(),
         _ => vec![object],
@@ -203,9 +204,12 @@ fn pods_of(object: &serde_json::Value) -> Vec<K8sPod> {
         .collect()
 }
 
-/// A workload's `spec.selector` as a `kubectl --selector` argument.
-fn label_selector(selector: &serde_json::Value) -> Option<String> {
-    let labels = selector["matchLabels"].as_object().into_iter().flatten().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("")));
+/// A workload's `spec.selector` as a `kubectl --selector` argument. A
+/// service's is a plain map of labels.
+pub(super) fn label_selector(selector: &serde_json::Value) -> Option<String> {
+    let plain = selector.get("matchLabels").is_none() && selector.get("matchExpressions").is_none();
+    let labels = if plain { selector } else { &selector["matchLabels"] };
+    let labels = labels.as_object().into_iter().flatten().map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or("")));
     let expressions = selector["matchExpressions"].as_array().into_iter().flatten().filter_map(|e| {
         let key = e["key"].as_str()?;
         let values = || e["values"].as_array().into_iter().flatten().filter_map(|v| v.as_str()).collect::<Vec<_>>().join(",");
@@ -305,6 +309,7 @@ mod tests {
         });
         assert_eq!(label_selector(&selector).as_deref(), Some("app=shop,tier in (web,api),!canary"));
         assert_eq!(label_selector(&serde_json::json!(null)), None);
+        assert_eq!(label_selector(&serde_json::json!({"app": "shop", "tier": "web"})).as_deref(), Some("app=shop,tier=web"));
 
         let pod = |name: &str| serde_json::json!({
             "kind": "Pod",

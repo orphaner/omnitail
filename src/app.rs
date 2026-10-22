@@ -43,6 +43,8 @@ pub struct Pane {
     pub badges: Badges,
     /// Format detection per container, for panes mixing them.
     pub by_container: HashMap<Arc<str>, PaneColor>,
+    /// Its pod went away: the pane stays, with what it showed, until closed.
+    pub gone: bool,
 }
 
 /// The lines of a source a pane gets: all of them, a pod's, or a container's.
@@ -54,6 +56,13 @@ pub enum Scope {
 }
 
 impl Scope {
+    fn pod(&self) -> Option<&str> {
+        match self {
+            Scope::All => None,
+            Scope::Pod(pod) | Scope::Container(pod, _) => Some(pod),
+        }
+    }
+
     fn accepts(&self, origin: Option<&Origin>) -> bool {
         match (self, origin) {
             (Scope::All, _) => true,
@@ -70,6 +79,14 @@ impl Scope {
 pub struct Badges {
     pub pod: bool,
     pub container: Option<usize>,
+}
+
+impl Badges {
+    /// Badges once shown stay: the lines already there need them, even
+    /// when the pods they tell apart are gone (scaled down).
+    fn or(self, new: Badges) -> Badges {
+        Badges { pod: self.pod || new.pod, container: self.container.max(new.container) }
+    }
 }
 
 /// What the app knows of a source: its pods, when it has some.
@@ -96,6 +113,7 @@ impl Pane {
             scope: Scope::All,
             badges: Badges::default(),
             by_container: HashMap::new(),
+            gone: false,
         }
     }
 
@@ -165,6 +183,7 @@ pub enum SelectPurpose {
     Filter,
     Scheme,
     Level,
+    Close,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +411,9 @@ pub struct App {
     /// Screens left by splitting a pane (`Enter`), restored by `Esc`.
     /// Their panes keep receiving lines.
     pub stack: Vec<Vec<Pane>>,
+    /// The source and scope of the pane each screen of `stack` was split
+    /// from (the current one last), to add the pods that start later.
+    splits: Vec<(SourceId, Scope)>,
     /// Badge colors given so far, by pod and by container name: each keeps
     /// its color everywhere.
     pod_colors: HashMap<Arc<str>, usize>,
@@ -413,6 +435,7 @@ impl App {
             panes,
             feeds,
             stack: Vec::new(),
+            splits: Vec::new(),
             mode: Mode::Panes,
             strip_ansi,
             wrap: true,
@@ -460,12 +483,84 @@ impl App {
     }
 
     /// Declares the pods a source runs: its lines carry their pod and
-    /// container, and its panes can be split into them (`Enter`).
+    /// container, and its panes can be split into them (`Enter`). Later
+    /// calls say which pods came and went.
     pub fn set_pods(&mut self, feed: SourceId, pods: Vec<K8sPod>) {
-        self.feeds[feed].pods_prefixed = true;
-        self.feeds[feed].pods = pods;
-        let badges = self.badges(feed, &Scope::All);
-        self.panes.iter_mut().filter(|p| p.feed == feed).for_each(|p| p.badges = badges);
+        let f = &mut self.feeds[feed];
+        let update = f.pods_prefixed;
+        f.pods_prefixed = true;
+        let old = std::mem::replace(&mut f.pods, pods);
+        if update {
+            self.follow_pods(feed, &old);
+        }
+        // No pods left: nothing new to tell apart.
+        if update && self.feeds[feed].pods.is_empty() {
+            return;
+        }
+        // Panes of pods gone keep their badges.
+        let panes = self.panes.iter().chain(self.stack.iter().flatten()).filter(|p| p.feed == feed && !p.gone);
+        let badges: Vec<Badges> = panes.map(|p| self.badges(feed, &p.scope)).collect();
+        let panes = self.panes.iter_mut().chain(self.stack.iter_mut().flatten()).filter(|p| p.feed == feed && !p.gone);
+        panes.zip(badges).for_each(|(p, b)| p.badges = if update { p.badges.or(b) } else { b });
+    }
+
+    /// Marks the panes of pods gone, and adds panes for new pods at the
+    /// end of the screens split from the whole source.
+    fn follow_pods(&mut self, feed: SourceId, old: &[K8sPod]) {
+        let pods = self.feeds[feed].pods.clone();
+        let listed = |pod: &str| pods.iter().any(|p| p.name == pod);
+        for pane in self.panes.iter_mut().chain(self.stack.iter_mut().flatten()).filter(|p| p.feed == feed) {
+            if let Some(pod) = pane.scope.pod() {
+                // A statefulset's pod comes back with the same name.
+                pane.gone = !listed(pod);
+            }
+        }
+        let new: Vec<&K8sPod> = pods.iter().filter(|p| !old.iter().any(|o| o.name == p.name)).collect();
+        for screen in 1..=self.stack.len() {
+            if self.splits.get(screen - 1) != Some(&(feed, Scope::All)) {
+                continue;
+            }
+            let (above, panes) = (&self.stack[screen - 1], self.screen(screen));
+            let Some(parent) = above.iter().find(|p| p.feed == feed && p.scope == Scope::All) else { continue };
+            // One pod at split time: its containers, so theirs too.
+            let by_pod = panes.iter().any(|p| p.feed == feed && matches!(p.scope, Scope::Pod(_)));
+            let mut added = Vec::new();
+            for pod in new.iter().filter(|pod| !panes.iter().any(|p| p.feed == feed && p.scope.pod() == Some(&pod.name))) {
+                let name: Arc<str> = pod.name.as_str().into();
+                if by_pod {
+                    added.push(self.child(parent, Scope::Pod(name)));
+                } else {
+                    added.extend(pod.containers.iter().map(|c| self.child(parent, Scope::Container(name.clone(), c.as_str().into()))));
+                }
+            }
+            match screen == self.stack.len() {
+                true => self.panes.extend(added),
+                false => self.stack[screen].extend(added),
+            }
+        }
+    }
+
+    /// Screen `i`: the first one is 0, the current one `stack.len()`.
+    fn screen(&self, i: usize) -> &[Pane] {
+        self.stack.get(i).unwrap_or(&self.panes)
+    }
+
+    /// Closes pane `index` (`d`). The last one stays.
+    fn close(&mut self, index: usize) {
+        if self.panes.len() == 1 {
+            self.notice = Some("the last pane stays: Esc to go back".into());
+        } else {
+            self.panes.remove(index);
+        }
+    }
+
+    /// Closes the panes of deleted pods (`D`).
+    fn close_gone(&mut self) {
+        match self.panes.iter().filter(|p| p.gone).count() {
+            0 => self.notice = Some("no pane of a deleted pod".into()),
+            n if n == self.panes.len() => self.notice = Some("only deleted pods here: Esc to go back".into()),
+            _ => self.panes.retain(|p| !p.gone),
+        }
     }
 
     pub fn ingest(&mut self, id: SourceId, event: SourceEvent) {
@@ -522,6 +617,10 @@ impl App {
                 for pane in self.panes.iter_mut().chain(self.stack.iter_mut().flatten()).filter(|p| p.feed == id) {
                     pane.buffer.clear_view(now, reason);
                 }
+            }
+            SourceEvent::Pods(pods) => {
+                tracing::info!(source = %feed.name, pods = pods.len(), "pods changed");
+                self.set_pods(id, pods);
             }
             SourceEvent::Status(status) => {
                 tracing::info!(source = %feed.name, %status);
@@ -642,6 +741,8 @@ impl App {
         pane.filter = parent.filter.clone();
         pane.level = parent.level;
         pane.badges = self.badges(parent.feed, &scope);
+        // A pod seen in the history but gone since.
+        pane.gone = scope.pod().is_some_and(|pod| !feed.pods.iter().any(|p| p.name == pod));
         pane.scope = scope;
         let scope = pane.scope.clone();
         for (_, entry) in parent.buffer.entries().filter(|(_, e)| scope.accepts(e.origin.as_deref())) {
@@ -658,6 +759,7 @@ impl App {
             self.notice = Some(format!("pane {}: nothing to split it into", index + 1));
             return;
         }
+        self.splits.push((self.panes[index].feed, self.panes[index].scope.clone()));
         self.stack.push(std::mem::replace(&mut self.panes, children));
     }
 
@@ -666,7 +768,10 @@ impl App {
     /// often; q does not ask).
     fn back(&mut self) {
         match self.stack.pop() {
-            Some(panes) => self.panes = panes,
+            Some(panes) => {
+                self.panes = panes;
+                self.splits.pop();
+            }
             None => self.confirm_quit = true,
         }
     }
@@ -799,6 +904,8 @@ impl App {
             KeyCode::Esc => self.back(),
             KeyCode::Char('C') => self.clear_all(),
             KeyCode::Char('c') => self.select(SelectPurpose::Clear),
+            KeyCode::Char('d') => self.select(SelectPurpose::Close),
+            KeyCode::Char('D') => self.close_gone(),
             KeyCode::Char('n') | KeyCode::Char('N') => match self.highlight {
                 Some(_) => self.select(SelectPurpose::Find { forward: key.code == KeyCode::Char('n') }),
                 None => self.notice = Some("no search: / to search".into()),
@@ -1182,6 +1289,7 @@ impl App {
                 self.prompt = Some(Prompt::new(PromptKind::PaneFilter(Some(pane)), input));
             }
             SelectPurpose::Scheme => self.open_schemes(pane, None),
+            SelectPurpose::Close => self.close(pane),
         }
     }
 
@@ -1561,6 +1669,73 @@ mod tests {
 
     fn texts(pane: &Pane) -> Vec<String> {
         pane.buffer.entries().map(|(_, e)| e.text.clone()).collect()
+    }
+
+    #[test]
+    fn pods_that_come_and_go_update_badges() {
+        let mut a = shop(pods(&["shop-1"], &["app", "proxy"]));
+        assert_eq!(a.panes[0].badges, Badges { pod: false, container: Some(5) });
+        a.split(0);
+        a.ingest(0, SourceEvent::Pods(pods(&["shop-1", "shop-2"], &["app", "proxy"])));
+        assert_eq!(a.panes[0].badges, Badges { pod: false, container: None }, "a container pane keeps its own");
+        a.back();
+        assert_eq!(a.panes[0].badges, Badges { pod: true, container: Some(5) }, "a second pod: pod badges");
+        a.ingest(0, SourceEvent::Pods(pods(&["shop-2"], &["app"])));
+        assert_eq!(a.panes[0].badges, Badges { pod: true, container: Some(5) }, "scaled down: its lines still need them");
+        a.ingest(0, SourceEvent::Pods(vec![]));
+        assert_eq!(a.panes[0].badges, Badges { pod: true, container: Some(5) }, "scaled to 0: unchanged");
+    }
+
+    fn scopes(a: &App) -> Vec<String> {
+        a.panes.iter().map(|p| format!("{}{}", &p.name[23..], if p.gone { " (gone)" } else { "" })).collect()
+    }
+
+    #[test]
+    fn new_pods_get_panes_and_gone_ones_stay_until_closed() {
+        let mut a = shop(pods(&["shop-1", "shop-2"], &["app", "proxy"]));
+        a.split(0);
+        assert_eq!(scopes(&a), [" > shop-1", " > shop-2"]);
+        // A rollout: shop-1 is replaced by shop-3.
+        a.ingest(0, SourceEvent::Pods(pods(&["shop-2", "shop-3"], &["app", "proxy"])));
+        assert_eq!(scopes(&a), [" > shop-1 (gone)", " > shop-2", " > shop-3"]);
+        assert_eq!(a.panes[0].badges, a.panes[1].badges, "gone, it keeps its badges");
+        a.ingest(0, line("[pod/shop-3/app] hello"));
+        assert_eq!(texts(&a.panes[2]), ["hello"]);
+
+        // Its containers, and a container's screen, are not split from the
+        // whole source: nothing is added there.
+        a.split(1);
+        a.ingest(0, SourceEvent::Pods(pods(&["shop-2", "shop-3", "shop-4"], &["app", "proxy"])));
+        assert_eq!(scopes(&a), [" > shop-2 > app", " > shop-2 > proxy"]);
+        a.back();
+        assert_eq!(scopes(&a), [" > shop-1 (gone)", " > shop-2", " > shop-3", " > shop-4"], "screens below follow too");
+
+        press(&mut a, KeyCode::Char('D'));
+        assert_eq!(scopes(&a), [" > shop-2", " > shop-3", " > shop-4"]);
+        press(&mut a, KeyCode::Char('D'));
+        assert_eq!(a.notice.as_deref(), Some("no pane of a deleted pod"));
+        press(&mut a, KeyCode::Char('d'));
+        press(&mut a, KeyCode::Char('2'));
+        assert_eq!(scopes(&a), [" > shop-2", " > shop-4"]);
+
+        a.back();
+        a.split(0);
+        assert_eq!(scopes(&a), [" > shop-2", " > shop-3", " > shop-4", " > shop-1 (gone)"], "split again: seen, and gone");
+    }
+
+    #[test]
+    fn a_single_pod_replaced_gets_container_panes() {
+        let mut a = shop(pods(&["shop-1"], &["app", "proxy"]));
+        a.start();
+        assert_eq!(scopes(&a), [" > shop-1 > app", " > shop-1 > proxy"]);
+        a.ingest(0, SourceEvent::Pods(pods(&["shop-2"], &["app", "proxy"])));
+        assert_eq!(scopes(&a), [" > shop-1 > app (gone)", " > shop-1 > proxy (gone)", " > shop-2 > app", " > shop-2 > proxy"]);
+        press(&mut a, KeyCode::Char('D'));
+        assert_eq!(scopes(&a), [" > shop-2 > app", " > shop-2 > proxy"]);
+        press(&mut a, KeyCode::Char('d'));
+        press(&mut a, KeyCode::Char('1'));
+        press(&mut a, KeyCode::Char('d'));
+        assert_eq!(a.notice.as_deref(), Some("the last pane stays: Esc to go back"));
     }
 
     #[test]

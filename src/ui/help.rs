@@ -25,6 +25,7 @@ pub const PANES: Section = Section {
         ("E e &", "filter all panes / one pane / all panes"),
         ("L l", "levels shown: all panes / one pane"),
         ("C c", "clear all panes / one pane"),
+        ("D d", "close the panes of deleted pods / one pane"),
         ("P p", "pause all panes / one pane"),
         ("s", "color scheme of a pane (none: no colors)"),
         ("S", "colors on/off, all panes"),

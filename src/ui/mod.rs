@@ -60,6 +60,14 @@ fn origin_badges(entry: &crate::buffer::Entry, badges: crate::app::Badges) -> Ve
     spans
 }
 
+/// The full pod and container names of a line, for the detail view.
+fn origin_line(o: &crate::buffer::Origin) -> Line<'static> {
+    let mut spans = Vec::from(badge(format!(" {} ", o.pod), o.color));
+    let color = Color::Indexed(BADGE_COLORS[o.container_color % BADGE_COLORS.len()]);
+    spans.push(Span::styled(o.container.to_string(), Style::new().fg(color).bold()));
+    Line::from(spans)
+}
+
 /// Rows of `text` behind `prefix` (badges, arrival time): the text gets the
 /// remaining width, and its continuation rows are indented under it.
 fn prefixed_rows(render: &text::Render, text: &str, prefix: Vec<Span<'static>>) -> Vec<Line<'static>> {
@@ -166,6 +174,7 @@ pub fn plain_text(raw: &str) -> String {
 /// the first of `right` (longest to shortest) that fits.
 fn render_title(frame: &mut Frame, area: Rect, index: usize, pane: &Pane, right: &[String]) {
     let (status, color) = match &pane.status {
+        _ if pane.gone => ("pod deleted".to_string(), MUTED),
         None => ("starting".to_string(), MUTED),
         Some(s @ SourceStatus::Running) => (s.to_string(), OK),
         Some(s @ SourceStatus::Waiting(_)) => (s.to_string(), WARN),
@@ -508,5 +517,18 @@ mod tests {
             "{s}"
         );
         assert!(s.lines().next().unwrap().contains("line 1 · json"), "{s}");
+    }
+
+    #[test]
+    fn detail_names_the_pod_and_container() {
+        let mut app = App::with_names(&["k8s: shop > deploy/shop"]);
+        let pods = ["shop-5d8-aaaaa", "shop-5d8-bbbbb"].map(|n| crate::spec::K8sPod { name: n.into(), containers: vec!["app".into()] });
+        app.set_pods(0, pods.to_vec());
+        app.ingest(0, SourceEvent::Line(r#"[pod/shop-5d8-bbbbb/app] {"msg":"hi"}"#.into()));
+        press(&mut app, KeyCode::Char('b'));
+        press(&mut app, KeyCode::Enter);
+        let s = screen(&mut app);
+        let body: Vec<&str> = s.lines().skip(1).take(4).collect();
+        assert_eq!(body, [" shop-5d8-bbbbb  app", "", "{", r#"  "msg": "hi""#], "{s}");
     }
 }

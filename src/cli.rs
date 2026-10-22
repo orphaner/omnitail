@@ -33,6 +33,11 @@ pub struct Cli {
     #[arg(long, value_name = "LEVEL")]
     pub level: Option<crate::level::Level>,
 
+    /// Follow kubernetes through the kubectl CLI instead of the built-in
+    /// client (which logs in once and follows new pods).
+    #[arg(long)]
+    pub kubectl: bool,
+
     /// Strip ANSI colors instead of rendering them.
     #[arg(long)]
     pub strip_ansi: bool,

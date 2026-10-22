@@ -34,6 +34,8 @@ const COMPOSE_FILES: [&str; 4] = ["compose.yaml", "compose.yml", "docker-compose
 pub struct ConfigFile {
     pub history: Option<usize>,
     pub strip_ansi: Option<bool>,
+    /// Kubernetes through the kubectl CLI rather than the built-in client.
+    pub kubectl: Option<bool>,
     /// omnitail's own coloring, on by default.
     pub color: Option<bool>,
     #[serde(default, rename = "source")]
@@ -74,6 +76,7 @@ pub struct Settings {
     pub sources: Vec<SourceConfig>,
     pub history: usize,
     pub strip_ansi: bool,
+    pub kubectl: bool,
     pub tail: Option<usize>,
     pub color: bool,
     pub schemes: HashMap<String, SchemeDef>,
@@ -105,6 +108,7 @@ impl Settings {
             sources,
             history: cli.history.or(file.history).unwrap_or(DEFAULT_HISTORY),
             strip_ansi: cli.strip_ansi || file.strip_ansi.unwrap_or(false),
+            kubectl: cli.kubectl || file.kubectl.unwrap_or(false),
             tail: cli.tail,
             color: !cli.no_color && file.color.unwrap_or(true),
             schemes: file.scheme,
@@ -123,6 +127,8 @@ impl Settings {
             #[serde(skip_serializing_if = "Option::is_none")]
             strip_ansi: Option<bool>,
             #[serde(skip_serializing_if = "Option::is_none")]
+            kubectl: Option<bool>,
+            #[serde(skip_serializing_if = "Option::is_none")]
             color: Option<bool>,
             source: Vec<SourceConfig>,
             #[serde(skip_serializing_if = "BTreeMap::is_empty")]
@@ -131,6 +137,7 @@ impl Settings {
         let printed = Printed {
             history: Some(self.history).filter(|&h| h != DEFAULT_HISTORY),
             strip_ansi: self.strip_ansi.then_some(true),
+            kubectl: self.kubectl.then_some(true),
             color: (!self.color).then_some(false),
             source: sources
                 .iter()

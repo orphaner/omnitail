@@ -13,6 +13,7 @@ mod ui;
 mod view;
 
 use std::fs::File;
+use std::io::IsTerminal;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, anyhow};
@@ -37,7 +38,7 @@ async fn main() -> Result<()> {
     }
     init_logging(&cli)?;
     let print_config = cli.print_config;
-    let settings = Settings::resolve(cli)?;
+    let settings = Settings::resolve(cli, !std::io::stdin().is_terminal())?;
     // Before the TUI starts, so that errors (e.g. no compose project) print normally.
     let sources = source::expand(settings.sources.clone(), settings.kubectl).await?;
     if print_config {

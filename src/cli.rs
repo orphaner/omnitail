@@ -10,8 +10,8 @@ use crate::spec::SourceSpec;
 pub struct Cli {
     /// Sources to follow: `<path>`, `file:<path>`, `cmd:<command>`,
     /// `docker:<container>` (or `d:`), `compose:[svc,…]` (or `dc:`), `k8s:<target> [kubectl args]`,
-    /// `journal:[unit]`, `-` (stdin). None: the compose project of the current
-    /// directory, if it has a compose file.
+    /// `journal:[unit]`, `-` (stdin). None: stdin when something is piped in
+    /// (`cmd | omnitail`), else the compose project of the current directory.
     #[arg(value_name = "SOURCE")]
     pub sources: Vec<SourceSpec>,
 

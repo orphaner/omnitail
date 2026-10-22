@@ -87,14 +87,18 @@ pub struct Settings {
 impl Settings {
     /// Config file sources come first, then command-line ones; command-line
     /// options win over the file.
-    /// With neither, the compose project of the current directory.
-    pub fn resolve(cli: Cli) -> Result<Self> {
+    /// With neither, stdin when something is piped into omnitail
+    /// (`piped`), else the compose project of the current directory.
+    pub fn resolve(cli: Cli, piped: bool) -> Result<Self> {
         let file = match &cli.config {
             Some(path) => ConfigFile::load(path)?,
             None => ConfigFile::default(),
         };
         let mut sources: Vec<SourceConfig> =
             file.sources.into_iter().chain(cli.sources.into_iter().map(Into::into)).collect();
+        if sources.is_empty() && piped {
+            sources.push(SourceSpec::Stdin.into());
+        }
         if sources.is_empty() && cli.config.is_none() {
             sources.extend(compose_here(Path::new(".")));
         }
@@ -225,7 +229,7 @@ mod tests {
             scheme = "none"
             "#,
         );
-        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap()]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap()]).unwrap(), false).unwrap();
         assert!(!s.color);
         assert_eq!(s.schemes["mine"].rules[0].group, 1);
         assert!(matches!(&s.sources[0].color_choice(), crate::color::Choice::Named(n) if n == &["mine", "generic"]));
@@ -246,12 +250,12 @@ mod tests {
         let path = write_config(dir.path(), "history = 50\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"");
         let path = path.to_str().unwrap();
 
-        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "b.log"]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "b.log"]).unwrap(), false).unwrap();
         let titles: Vec<_> = s.sources.iter().map(SourceConfig::title).collect();
         assert_eq!(titles, ["cmd:date", "file:b.log"]);
         assert_eq!(s.history, 50);
 
-        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "--history", "7"]).unwrap()).unwrap();
+        let s = Settings::resolve(Cli::try_parse_from(["omnitail", "-c", path, "--history", "7"]).unwrap(), false).unwrap();
         assert_eq!(s.history, 7);
     }
 
@@ -273,7 +277,7 @@ mod tests {
             "color = false\n[scheme.mine]\nrules = [{ regex = 'x', style = \"red\" }]\n[[source]]\ntype = \"cmd\"\ncommand = \"date\"\ntail = 3",
         );
         let cli = Cli::try_parse_from(["omnitail", "-c", path.to_str().unwrap(), "--level", "warn", "-n", "9"]).unwrap();
-        let settings = Settings::resolve(cli).unwrap();
+        let settings = Settings::resolve(cli, false).unwrap();
         let services = ["web", "db"].map(|s| SourceConfig {
             name: Some(s.into()),
             ..SourceSpec::Compose { services: vec![s.into()], file: Some("compose.yaml".into()) }.into()
@@ -295,6 +299,9 @@ mod tests {
 
     #[test]
     fn stdin_only_once() {
-        assert!(Settings::resolve(Cli::try_parse_from(["omnitail", "-", "-"]).unwrap()).is_err());
+        assert!(Settings::resolve(Cli::try_parse_from(["omnitail", "-", "-"]).unwrap(), false).is_err());
+        let piped = |args: &[&str]| Settings::resolve(Cli::try_parse_from(args).unwrap(), true).unwrap().sources;
+        assert_eq!(piped(&["omnitail"])[0].spec, SourceSpec::Stdin, "`cmd | omnitail`");
+        assert_eq!(piped(&["omnitail", "a.log"]).len(), 1, "explicit sources: stdin only with `-`");
     }
 }
